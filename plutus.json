@@ -1,7 +1,7 @@
 {
   "preamble": {
-    "title": "mpizenberg/token-cred",
-    "description": "Aiken contracts for project 'mpizenberg/token-cred'",
+    "title": "mpizenberg/aiken-token-cred",
+    "description": "Use unique Cardano native tokens as credentials",
     "version": "0.0.0",
     "plutusVersion": "v3",
     "compiler": {

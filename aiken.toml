@@ -1,13 +1,13 @@
-name = "mpizenberg/token-cred"
+name = "mpizenberg/aiken-token-cred"
 version = "0.0.0"
 compiler = "v1.1.15"
 plutus = "v3"
 license = "Apache-2.0"
-description = "Aiken contracts for project 'mpizenberg/token-cred'"
+description = "Use unique Cardano native tokens as credentials"
 
 [repository]
 user = "mpizenberg"
-project = "token-cred"
+project = "aiken-token-cred"
 platform = "github"
 
 [[dependencies]]

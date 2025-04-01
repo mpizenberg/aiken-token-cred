@@ -1,0 +1,117 @@
+{
+  "preamble": {
+    "title": "aiken-token-cred/lock",
+    "description": "Example lock script using aiken-token-cred",
+    "version": "0.0.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.15+f03633e"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "lock.lock.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/cardano~1assets~1PolicyId"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/lock~1WithdrawalIndex"
+        }
+      },
+      "compiledCode": "5901ad01010029800aba2aba1aba0aab9faab9eaab9dab9a4888888966002646464b30013370e900118029baa0018994c004c02800660146016003370e90002444b30013001300937540051332259800980198059baa001899192cc004cdc3a4008601a6ea80062b30013375e6022601c6ea8005300122d87a9f581c94c48e8037705486cdb9d972464a194c92088339df749a3d2300d783ff008991919800800801112cc0040062646600200200844b30010018a508acc004cdc79bae301230160010098a51899801001180b800a02240511323322330050053018004375c60220026eb4c048004c0500050121bab300e0028b20188b2018300c00132337606020002602060220026eb0c03cc030dd5000c5900a1bae300d300a37540046530010019bab300e300f300f300f300f300f300f300f300f300f300b3754601c011375a601c00e80088896600200514c103d87a80008992cc004c01400a266e95200033010374e66020601a00266020601c00297ae04bd70466002009301200399b80002480050042018301000240391640203006375400314a08020c020c024004c020004c00cdd5004452689b2b200201",
+      "hash": "be32dc7e05159fa0611fd13f1bd49e44f8a5f03b036c29b82ab2ad17"
+    },
+    {
+      "title": "lock.lock.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "5901ad01010029800aba2aba1aba0aab9faab9eaab9dab9a4888888966002646464b30013370e900118029baa0018994c004c02800660146016003370e90002444b30013001300937540051332259800980198059baa001899192cc004cdc3a4008601a6ea80062b30013375e6022601c6ea8005300122d87a9f581c94c48e8037705486cdb9d972464a194c92088339df749a3d2300d783ff008991919800800801112cc0040062646600200200844b30010018a508acc004cdc79bae301230160010098a51899801001180b800a02240511323322330050053018004375c60220026eb4c048004c0500050121bab300e0028b20188b2018300c00132337606020002602060220026eb0c03cc030dd5000c5900a1bae300d300a37540046530010019bab300e300f300f300f300f300f300f300f300f300f300b3754601c011375a601c00e80088896600200514c103d87a80008992cc004c01400a266e95200033010374e66020601a00266020601c00297ae04bd70466002009301200399b80002480050042018301000240391640203006375400314a08020c020c024004c020004c00cdd5004452689b2b200201",
+      "hash": "be32dc7e05159fa0611fd13f1bd49e44f8a5f03b036c29b82ab2ad17"
+    },
+    {
+      "title": "unique.mint_unique.mint",
+      "redeemer": {
+        "title": "_redeemer",
+        "schema": {
+          "$ref": "#/definitions/Data"
+        }
+      },
+      "parameters": [
+        {
+          "title": "utxo",
+          "schema": {
+            "$ref": "#/definitions/cardano~1transaction~1OutputReference"
+          }
+        }
+      ],
+      "compiledCode": "590159010100229800aba2aba1aba0aab9faab9eaab9dab9a488888896600264653001300800198041804800cc0200092225980099b8748000c01cdd500144c8c966002601c0031325980099b880014800229462b30013370e002900144c8cc004004dd6180798061baa0052259800800c528456600266ebcc040c034dd51808000809c528c4cc008008c04400500b201c8a5040248048dd69806800c5900b1919800800992cc004cdc3a400460146ea8006297adef6c6089bab300e300b37540028048c8cc004004dd59807180798079807980798059baa0042259800800c530103d87a8000899192cc004cdc8803000c56600266e3c018006266e95200033010300e0024bd7045300103d87a80004031133004004301200340306eb8c030004c03c00500d112cc004006297ae089980698059807000998010011807800a018375c601660106ea800a2c8030601000260066ea802229344d9590011",
+      "hash": "27d1ed74f2a8ef5daec386c1e012a3ecb4b7af429fb8685af1750bcd"
+    },
+    {
+      "title": "unique.mint_unique.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "utxo",
+          "schema": {
+            "$ref": "#/definitions/cardano~1transaction~1OutputReference"
+          }
+        }
+      ],
+      "compiledCode": "590159010100229800aba2aba1aba0aab9faab9eaab9dab9a488888896600264653001300800198041804800cc0200092225980099b8748000c01cdd500144c8c966002601c0031325980099b880014800229462b30013370e002900144c8cc004004dd6180798061baa0052259800800c528456600266ebcc040c034dd51808000809c528c4cc008008c04400500b201c8a5040248048dd69806800c5900b1919800800992cc004cdc3a400460146ea8006297adef6c6089bab300e300b37540028048c8cc004004dd59807180798079807980798059baa0042259800800c530103d87a8000899192cc004cdc8803000c56600266e3c018006266e95200033010300e0024bd7045300103d87a80004031133004004301200340306eb8c030004c03c00500d112cc004006297ae089980698059807000998010011807800a018375c601660106ea800a2c8030601000260066ea802229344d9590011",
+      "hash": "27d1ed74f2a8ef5daec386c1e012a3ecb4b7af429fb8685af1750bcd"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "title": "ByteArray",
+      "dataType": "bytes"
+    },
+    "Data": {
+      "title": "Data",
+      "description": "Any Plutus data."
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "cardano/assets/PolicyId": {
+      "title": "PolicyId",
+      "dataType": "bytes"
+    },
+    "cardano/transaction/OutputReference": {
+      "title": "OutputReference",
+      "description": "An `OutputReference` is a unique reference to an output on-chain. The `output_index`\n corresponds to the position in the output list of the transaction (identified by its id)\n that produced that output",
+      "anyOf": [
+        {
+          "title": "OutputReference",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "transaction_id",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "output_index",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "lock/WithdrawalIndex": {
+      "title": "WithdrawalIndex",
+      "dataType": "integer"
+    }
+  }
+}

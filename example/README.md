@@ -4,6 +4,7 @@ Anyone or any script holding the token can unlock the funds.
 
 The example proceeds in these few steps:
 
+0. (Needed only once per network) Register the token-cred script.
 1. Mint a unique token, parameterized by some wallet UTxO being spent.
 2. Send 2 ada to a lock script address, using the token-cred contract to check ownership.
 3. Retrieve the 2 ada by presenting the token with our payment key.
@@ -17,5 +18,6 @@ In that case, instead adding our pub key to the Tx required signers field, we wo
 ## Compiling our aiken + elm-cardano project
 
 ```sh
+cd lock/ && aiken build && cd ..
 npx elm-cardano make src/Main.elm --output main.js && python -m http.server
 ```

@@ -4,7 +4,7 @@ use cardano/assets.{PolicyId}
 use cardano/transaction.{Transaction, Withdraw}
 
 const token_cred_script =
-  Script(#"94c48e8037705486cdb9d972464a194c92088339df749a3d2300d783")
+  Script(#"68b9663227b2bb19a06af04af405fa410f950698689131f31a3f9ada")
 
 pub type WithdrawalIndex =
   Int
@@ -21,6 +21,7 @@ validator lock {
 
     // Check that the token-cred withdraw script is present,
     // with the owner policy in its redeemer.
+    trace @"redeemers": tx.redeemers
     expect Some(Pair(Withdraw(cred), withdraw_redeemer_data)) =
       list.at(tx.redeemers, redeemer)
     expect cred == token_cred_script

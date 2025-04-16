@@ -1,4 +1,4 @@
-name: Continuous Integration
+name: Aiken
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: aiken-lang/setup-aiken@v1
         with:
-          version: v1.1.15
+          version: v1.1.16
       - run: aiken fmt --check
       - run: aiken check -D
       - run: aiken build

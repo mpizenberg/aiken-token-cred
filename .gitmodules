@@ -1,4 +1,4 @@
 [submodule "example/elm-cardano"]
-	path = example/elm-cardano
+	path = example-lock/elm/elm-cardano
 	url = https://github.com/elm-cardano/elm-cardano.git
 	branch = release

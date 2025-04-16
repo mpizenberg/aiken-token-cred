@@ -2,7 +2,7 @@ use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Credential, Script, VerificationKey}
 use cardano/assets.{Lovelace, PolicyId}
-use cardano/certificate.{Certificate, RegisterCredential, UnregisterCredential}
+use cardano/certificate.{Certificate, RegisterCredential}
 use cardano/transaction.{Input, Transaction}
 
 pub type Index {
@@ -10,7 +10,7 @@ pub type Index {
   SpentInputIndex(Int)
 }
 
-validator check_token_creds {
+validator check_badges {
   /// Check all token credentials provided in the redeemer.
   /// For each token policy ID, also provide the index of the UTxO
   /// in the (reference) inputs containing the token (for perf optimization).
@@ -35,11 +35,11 @@ validator check_token_creds {
     }
   }
 
-  /// Allow (un)registration of the script, to enable withdrawals.
+  /// Allow registration of the script, to enable withdrawals.
+  /// TODO: enable lawful unregistrations.
   publish(_redeemer: Data, certificate: Certificate, _tx: Data) {
     when certificate is {
       RegisterCredential { .. } -> True
-      UnregisterCredential { .. } -> True
       _ -> False
     }
   }

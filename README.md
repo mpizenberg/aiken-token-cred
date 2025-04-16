@@ -1,4 +1,4 @@
-# token-cred
+# Cardano Badges
 
 This repository provides an approach to use unique Cardano native tokens as credentials.
 

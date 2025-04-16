@@ -3,16 +3,17 @@ port module Main exposing (main)
 import Browser
 import Bytes.Comparable as Bytes exposing (Bytes)
 import Bytes.Map
-import Cardano exposing (CertificateIntent(..), CredentialWitness(..), PlutusScriptWitness, ScriptWitness(..), SpendSource(..), TxFinalized, TxIntent(..), TxOtherInfo(..), WitnessSource(..))
 import Cardano.Address as Address exposing (Address, Credential(..), CredentialHash, NetworkId(..))
 import Cardano.Cip30 as Cip30
 import Cardano.Data as Data
 import Cardano.Script as Script exposing (PlutusScript, PlutusVersion(..), ScriptCbor)
 import Cardano.Transaction as Transaction exposing (Transaction)
 import Cardano.TxExamples
+import Cardano.TxIntent as TxIntent exposing (CertificateIntent(..), SpendSource(..), TxFinalized, TxIntent(..), TxOtherInfo(..))
 import Cardano.Uplc as Uplc
 import Cardano.Utxo as Utxo exposing (Output, OutputReference, TransactionId)
 import Cardano.Value as Value
+import Cardano.Witness as Witness
 import Dict.Any
 import Html exposing (Html, button, div, text)
 import Html.Attributes as HA exposing (height, src)
@@ -22,16 +23,17 @@ import Integer
 import Json.Decode as JD exposing (Decoder, Value)
 import List.Extra
 import Natural
+import TokenCred exposing (TokenOwner(..))
 
 
 tokenCredScriptHash =
     -- Constant retrieved from the aiken-token-cred blueprint
-    Bytes.fromHexUnchecked "68b9663227b2bb19a06af04af405fa410f950698689131f31a3f9ada"
+    Bytes.fromHexUnchecked "3f64a17e7dcb294ede555c607ba879671155e1807d5ad8e7b556b71a"
 
 
 tokenCredScriptBytes =
     -- Constant retrieved from the aiken-token-cred blueprint
-    Bytes.fromHexUnchecked "59033f01010029800aba4aba2aba1aba0aab9faab9eaab9dab9cab9a4888888888c966002646465300130073754003370e90004c02c00e601600491112cc004cdc3a400800913259800801402626464660020020044464b30010028994c004dd6180098091baa0089bab3015301630163016301630163016301237540113758602a602c602c602c602c602c602c602c602c60246ea802122232330010010092259800800c528c5660026464b300130103018375400319800912cc004006297ae089980e980d180f00099801001180f800a038911919800800801912cc00400629422b30013371e6eb8c08000400e2946266004004604200280d101e4c070c074c064dd5180e180c9baa00148896600266004660060066eacc02cc070dd50009bae301b0058992cc004c050c070dd5000c4cc00c024dd71810180e9baa00189919800800805912cc00400629422b30013375e603c604400200714a313300200230230014070810101a180f980e1baa301f301c3754003153301a49139657870656374206c6973742e686173286173736574732e706f6c6963696573286f75747075742e76616c7565292c20706f6c6963795f696429001640648a9980ba493965787065637420536f6d6528696e70757429203d206c6973742e6174287265665f696e707574732c207265665f696e7075745f696e6465782900164058653001001803cdd6980c80120022225980080145300103d87a80008acc004c048006266e9520003301d301e0024bd70466002007301f00299b8000148005003203040706034003133002002301b0018a50405080c04602a602c0031323259800800c03e01f00f807c4cc8966002003011808c046264600c603400e6eb400602280d0dd70009809801203030110013014002404860040046eac00a013009804a024300f300c375400b15980099b87480180122646644b300130060018a518acc004cdc3a400400314a314a0806100c1bad3010001300c37546020602200260186ea80162941009201218051805800980500098029baa00b8a4d15330034911856616c696461746f722072657475726e65642066616c7365001365640082a6600492012072656465656d65723a2050616972733c506f6c69637949642c20496e6465783e001601"
+    Bytes.fromHexUnchecked "59045001010029800aba4aba2aba1aba0aab9faab9eaab9dab9cab9a4888888888c966002646465300130073754003370e90004c02c00e601600491112cc004cdc3a400800913259800801402626464660020020044464b30010028cc0048c054c0580066eb0c050c044dd5003cdd6180a180a980a980a980a980a980a980a980a98089baa0079bab30143015301530153015301530153011375400e9111191919800800805112cc00400629462b30019800980d800c896600200314bd7044cc070c064c074004cc008008c07800501b488c8cc00400400c896600200314a115980099b8f375c603e00200714a31330020023020001406480ea444b30010028a6103d87a80008acc004c048006266e9520003301d301e0024bd70466002007301f00299b80001480050032030407091114c004dd7180d8024c0700126006007300100148888c966002603060406ea8012264b3001301930213754003132598009980498019bab30123023375400200f13259800980d98119baa0018998050089bae302730243754003132330010010112259800800c528456600266ebcc094c0a400400e2946266004004605400281190272042302630233754604c60466ea80062a6604292139657870656374206c6973742e686173286173736574732e706f6c6963696573286f75747075742e76616c7565292c20706f6c6963795f69642900164080604a604c60446ea8c094c088dd5000c54cc08124012d65787065637420536f6d6528696e70757429203d206c6973742e6174287265665f696e707574732c20696478290016407c660040186eb4c090c084dd500244c966002603260426ea800626601060046eacc044c088dd51812981318111baa30253022375400200d153302049013865787065637420536f6d6528496e707574207b206f75747075742c202e2e207d29203d206c6973742e617428696e707574732c20696478290016407c6600401e6eb4c090c084dd5002203c230030012266004004603800314a080a90191bac300430153754016899192cc00400601f00f807c03e26644b3001001899912cc004c038006264b300100180a44c96600200301580ac056264b3001301e003802c05901b1bad00180aa03c301b0014064602e6ea800e2b30013370e9001000c4c9660020030148992cc00400602b01580ac4c966002603c00700580b2036375a0030154078603600280c8c05cdd5001c04d014202813005301900630143754003011808c04602280d0dd70009809801203030110013014002404860040046eac00a013009804a024300f300c375400b15980099b87480180122646644b300130060018a518acc004cdc3a400400314a314a0806100c1bad3010001300c37546020602200260186ea80162941009201218051805800980500098029baa00b8a4d15330034911856616c696461746f722072657475726e65642066616c7365001365640082a6600492012072656465656d65723a2050616972733c506f6c69637949642c20496e6465783e001601"
 
 
 main =
@@ -219,7 +221,7 @@ update msg model =
                 ( Ok (Cip30.ApiResponse _ (Cip30.SubmittedTx txId)), Submitting ctx action { tx } ) ->
                     let
                         { updatedState } =
-                            Cardano.updateLocalState txId tx ctx.localStateUtxos
+                            TxIntent.updateLocalState txId tx ctx.localStateUtxos
 
                         updatedCtx =
                             { ctx | localStateUtxos = updatedState }
@@ -361,7 +363,7 @@ update msg model =
                     -- Register the script cred
                     , IssueCertificate <|
                         RegisterStake
-                            { delegator = WithScript ctx.tokenCredScript.hash <| PlutusWitness registerWitness
+                            { delegator = Witness.WithScript ctx.tokenCredScript.hash <| Witness.Plutus registerWitness
                             , deposit = depositAmount
                             }
                     ]
@@ -369,13 +371,13 @@ update msg model =
                 registerWitness =
                     { script =
                         ( Script.plutusVersion ctx.tokenCredScript.plutus
-                        , WitnessByValue <| Script.cborWrappedBytes ctx.tokenCredScript.plutus
+                        , Witness.ByValue <| Script.cborWrappedBytes ctx.tokenCredScript.plutus
                         )
                     , redeemerData = \_ -> Data.List []
                     , requiredSigners = []
                     }
             in
-            case Cardano.finalize ctx.localStateUtxos [] registerIntents of
+            case TxIntent.finalize ctx.localStateUtxos [] registerIntents of
                 Ok tx ->
                     let
                         _ =
@@ -386,7 +388,7 @@ update msg model =
                     )
 
                 Err err ->
-                    ( setError (Debug.toString err) model, Cmd.none )
+                    ( setError (TxIntent.errorToString err) model, Cmd.none )
 
         ( MintTokenKeyButtonClicked, ParametersSet ctx _ ) ->
             let
@@ -409,7 +411,7 @@ update msg model =
                     , MintBurn
                         { policyId = policyId
                         , assets = Bytes.Map.singleton emptyName Integer.one
-                        , scriptWitness = PlutusWitness mintWitness
+                        , scriptWitness = Witness.Plutus mintWitness
                         }
 
                     -- Send the token to the wallet
@@ -420,13 +422,13 @@ update msg model =
                 mintWitness =
                     { script =
                         ( Script.plutusVersion ctx.uniqueMint.appliedScript
-                        , WitnessByValue <| Script.cborWrappedBytes ctx.uniqueMint.appliedScript
+                        , Witness.ByValue <| Script.cborWrappedBytes ctx.uniqueMint.appliedScript
                         )
                     , redeemerData = \_ -> Data.List []
                     , requiredSigners = []
                     }
             in
-            case Cardano.finalize ctx.localStateUtxos [] mintingIntents of
+            case TxIntent.finalize ctx.localStateUtxos [] mintingIntents of
                 Ok tx ->
                     let
                         _ =
@@ -438,7 +440,7 @@ update msg model =
                     )
 
                 Err err ->
-                    ( setError (Debug.toString err) model, Cmd.none )
+                    ( setError (TxIntent.errorToString err) model, Cmd.none )
 
         ( LockButtonClicked, TokenMintingDone ctx _ ) ->
             let
@@ -470,7 +472,7 @@ update msg model =
                 tokenPolicyInDatum =
                     Utxo.datumValueFromData <| Data.Bytes <| Bytes.toAny policyId
             in
-            case Cardano.finalize ctx.localStateUtxos [] lockingIntents of
+            case TxIntent.finalize ctx.localStateUtxos [] lockingIntents of
                 Ok tx ->
                     let
                         _ =
@@ -481,13 +483,10 @@ update msg model =
                     )
 
                 Err err ->
-                    ( setError (Debug.toString err) model, Cmd.none )
+                    ( setError (TxIntent.errorToString err) model, Cmd.none )
 
         ( UnlockButtonClicked, LockingDone ctx { txId } ) ->
             let
-                policyId =
-                    Script.hash <| Script.Plutus ctx.uniqueMint.appliedScript
-
                 lockedValue =
                     Value.onlyLovelace <| Natural.fromSafeInt 2000000
 
@@ -495,6 +494,24 @@ update msg model =
                 lockedUtxo =
                     { transactionId = txId, outputIndex = 0 }
 
+                ( tokenCredIntents, tokenCredOtherInfo ) =
+                    TokenCred.checkOwnership networkId tokenCredScriptConfig ctx.localStateUtxos tokenProofs
+
+                networkId =
+                    Address.extractNetworkId ctx.loadedWallet.changeAddress |> Maybe.withDefault Testnet
+
+                tokenCredScriptConfig =
+                    { hash = tokenCredScriptHash
+                    , plutus = Script.plutusScriptFromBytes Script.PlutusV3 tokenCredScriptBytes
+                    }
+
+                tokenProofs =
+                    [ { policyId = Script.hash <| Script.Plutus ctx.uniqueMint.appliedScript
+                      , ownerType = ReferencedTokenAtPubkeyAddress
+                      }
+                    ]
+
+                -- Building all the unlocking intents
                 unlockingIntents =
                     -- Spend the locked UTxO
                     [ Spend <|
@@ -504,16 +521,6 @@ update msg model =
                             , plutusScriptWitness = unlockWitness
                             }
 
-                    -- Add withdraw script proof of token hold
-                    , WithdrawRewards
-                        { stakeCredential =
-                            { networkId = Address.extractNetworkId ctx.loadedWallet.changeAddress |> Maybe.withDefault Testnet
-                            , stakeCredential = ScriptHash ctx.tokenCredScript.hash
-                            }
-                        , amount = Natural.zero
-                        , scriptWitness = Just <| PlutusWitness tokenCredWitness
-                        }
-
                     -- Send the locked value back to our wallet
                     , SendTo ctx.loadedWallet.changeAddress lockedValue
                     ]
@@ -521,77 +528,18 @@ update msg model =
                 unlockWitness =
                     { script =
                         ( Script.plutusVersion ctx.lockScript.plutus
-                        , WitnessByValue <| Script.cborWrappedBytes ctx.lockScript.plutus
-                        )
-                    , redeemerData = \body -> Data.Int (Integer.fromSafeInt <| tokenCredWithdrawalIndex body)
-                    , requiredSigners = []
-                    }
-
-                -- Give the index of the withdrawal redeemer in the script context
-                -- corresponding to the token-cred withdrawal script.
-                tokenCredWithdrawalIndex txBody =
-                    -- let
-                    --     -- Check order (script credential before key credential)
-                    --     orderedRedeemers =
-                    --         Debug.todo "order redeemers as in the script context"
-                    --
-                    --     -- We know this is the first withdrawal since there is only one
-                    --     isTokenCredWithdrawal redeemer =
-                    --         (redeemer.tag == Redeemer.Reward)
-                    --             && (redeemer.index == 0)
-                    -- in
-                    -- List.Extra.findIndex isTokenCredWithdrawal orderedRedeemers
-                    --     |> Maybe.withDefault 0
-                    -- TODO: change this, will need breaking change in Intents ...
-                    -- For now it’s the second one after the spend redeemer, so index 1
-                    1
-
-                tokenCredWitness : PlutusScriptWitness
-                tokenCredWitness =
-                    { script =
-                        ( Script.plutusVersion ctx.tokenCredScript.plutus
-                        , WitnessByValue <| Script.cborWrappedBytes ctx.tokenCredScript.plutus
+                        , Witness.ByValue <| Script.cborWrappedBytes ctx.lockScript.plutus
                         )
                     , redeemerData =
-                        \txBody ->
-                            Data.Map
-                                [ ( Data.Bytes <| Bytes.toAny <| policyId
-                                  , Data.Int <| Integer.fromSafeInt <| indexOfRefInputHoldingToken txBody.referenceInputs
-                                  )
-                                ]
-
-                    -- The token is hold in a UTxO in our wallet,
-                    -- so we need to add our payment credential to the required signers.
-                    , requiredSigners =
-                        Address.extractPubKeyHash ctx.loadedWallet.changeAddress
-                            |> Maybe.map List.singleton
-                            |> Maybe.withDefault []
+                        \txContext ->
+                            TokenCred.findWithdrawalRedeemerIndex tokenCredScriptHash txContext.redeemers txContext.withdrawals
+                                |> Maybe.withDefault -1
+                                |> Integer.fromSafeInt
+                                |> Data.Int
+                    , requiredSigners = []
                     }
-
-                indexOfRefInputHoldingToken referenceInputs =
-                    referenceInputs
-                        |> List.Extra.findIndex
-                            (\ref ->
-                                Dict.Any.get ref ctx.localStateUtxos
-                                    |> Maybe.map hasTokenKey
-                                    |> Maybe.withDefault False
-                            )
-                        |> Maybe.withDefault -1
-
-                -- Add a reference input to the UTxO holding the token key
-                hasTokenKey output =
-                    Bytes.Map.member policyId output.amount.assets
-
-                utxoHoldingTheTokenKey =
-                    Dict.Any.filter (\_ -> hasTokenKey) ctx.localStateUtxos
-                        |> Dict.Any.keys
-                        |> List.head
-
-                otherInfo =
-                    Maybe.map (\ref -> [ TxReferenceInput ref ]) utxoHoldingTheTokenKey
-                        |> Maybe.withDefault []
             in
-            case Cardano.finalize ctx.localStateUtxos otherInfo unlockingIntents of
+            case TxIntent.finalize ctx.localStateUtxos tokenCredOtherInfo (unlockingIntents ++ tokenCredIntents) of
                 Ok tx ->
                     let
                         _ =
@@ -602,7 +550,7 @@ update msg model =
                     )
 
                 Err err ->
-                    ( setError (Debug.toString err) model, Cmd.none )
+                    ( setError (TxIntent.errorToString err) model, Cmd.none )
 
         ( BurnTokenKeyButtonClicked, UnlockingDone ctx _ ) ->
             let
@@ -625,20 +573,20 @@ update msg model =
                     , MintBurn
                         { policyId = policyId
                         , assets = Bytes.Map.singleton emptyName Integer.negativeOne
-                        , scriptWitness = PlutusWitness mintWitness
+                        , scriptWitness = Witness.Plutus mintWitness
                         }
                     ]
 
                 mintWitness =
                     { script =
                         ( Script.plutusVersion ctx.uniqueMint.appliedScript
-                        , WitnessByValue <| Script.cborWrappedBytes ctx.uniqueMint.appliedScript
+                        , Witness.ByValue <| Script.cborWrappedBytes ctx.uniqueMint.appliedScript
                         )
                     , redeemerData = \_ -> Data.List []
                     , requiredSigners = []
                     }
             in
-            case Cardano.finalize ctx.localStateUtxos [] burningIntents of
+            case TxIntent.finalize ctx.localStateUtxos [] burningIntents of
                 Ok tx ->
                     let
                         _ =
@@ -649,9 +597,9 @@ update msg model =
                     )
 
                 Err err ->
-                    ( setError (Debug.toString err) model, Cmd.none )
+                    ( setError (TxIntent.errorToString err) model, Cmd.none )
 
-        ( TrySubmitAgainButtonClicked, Submitting ctx action { tx } ) ->
+        ( TrySubmitAgainButtonClicked, Submitting ctx _ { tx } ) ->
             ( setError "" model
             , toWallet (Cip30.encodeRequest (Cip30.submitTx ctx.loadedWallet.wallet tx))
             )
@@ -795,7 +743,7 @@ displayErrors err =
         text ""
 
     else
-        div [ HA.style "color" "red" ] [ Html.b [] [ text <| "ERRORS: " ], text err ]
+        Html.pre [ HA.style "color" "red" ] [ Html.b [] [ text <| "ERRORS: " ], text err ]
 
 
 viewLoadedWallet : LoadedWallet -> List (Html msg)

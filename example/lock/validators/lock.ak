@@ -4,7 +4,7 @@ use cardano/assets.{PolicyId}
 use cardano/transaction.{Transaction, Withdraw}
 
 const token_cred_script =
-  Script(#"68b9663227b2bb19a06af04af405fa410f950698689131f31a3f9ada")
+  Script(#"3f64a17e7dcb294ede555c607ba879671155e1807d5ad8e7b556b71a")
 
 pub type WithdrawalIndex =
   Int

@@ -25,7 +25,7 @@ validator lock {
     expect Some(Pair(Withdraw(cred), withdraw_redeemer_data)) =
       list.at(tx.redeemers, redeemer)
     expect cred == token_cred_script
-    expect token_creds: Pairs<PolicyId, Int> = withdraw_redeemer_data
+    expect token_creds: Pairs<PolicyId, Data> = withdraw_redeemer_data
     list.any(token_creds, fn(Pair(id, _)) { id == owner })
   }
 

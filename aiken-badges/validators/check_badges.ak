@@ -10,6 +10,17 @@ pub type Index {
   SpentInputIndex(Int)
 }
 
+// Property tests:
+// - negative indexes always fail
+// - removing a redeemer from a successful check is still a successful check
+// - adding a non-existing policy ID makes it fail
+//
+// Benches:
+// - scaling of spent badges
+// - scaling of ref badges with public keys
+// - scaling of ref badges with native multisigs
+// - scaling of ref badges with plutus scripts
+
 validator check_badges {
   /// Check all token credentials provided in the redeemer.
   /// For each token policy ID, also provide the index of the UTxO

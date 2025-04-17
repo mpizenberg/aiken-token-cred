@@ -1,7 +1,7 @@
 # Example Lock
 
 This directory contains example usage for authentication with badges.
-The badge is used as a lock for a script.
+The badge is used as an unlocking key for a lock script.
 
 - `aiken/`: a lock contract using a badge to unlock.
-- `elm/`: elm-cardano frontend example for the lock contract.
+- `elm/`: elm frontend example for the lock contract.

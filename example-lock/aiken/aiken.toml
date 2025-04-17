@@ -1,9 +1,9 @@
-name = "aiken-token-cred/lock"
+name = "cardano-badges/lock"
 version = "0.0.0"
 compiler = "v1.1.16"
 plutus = "v3"
 license = "Apache-2.0"
-description = "Example lock script using aiken-token-cred"
+description = "Example lock script using badges"
 
 [[dependencies]]
 name = "aiken-lang/stdlib"

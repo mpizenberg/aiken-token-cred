@@ -1,14 +1,9 @@
-name = "mpizenberg/aiken-token-cred"
+name = "mpizenberg/cardano-badges"
 version = "0.0.0"
 compiler = "v1.1.16"
 plutus = "v3"
 license = "Apache-2.0"
 description = "Use unique Cardano native tokens as credentials"
-
-[repository]
-user = "mpizenberg"
-project = "aiken-token-cred"
-platform = "github"
 
 [[dependencies]]
 name = "aiken-lang/stdlib"

@@ -23,17 +23,8 @@ import Integer
 import Json.Decode as JD exposing (Decoder, Value)
 import List.Extra
 import Natural
+import Result.Extra
 import TokenCred exposing (TokenOwner(..))
-
-
-tokenCredScriptHash =
-    -- Constant retrieved from the aiken-token-cred blueprint
-    Bytes.fromHexUnchecked "3f64a17e7dcb294ede555c607ba879671155e1807d5ad8e7b556b71a"
-
-
-tokenCredScriptBytes =
-    -- Constant retrieved from the aiken-token-cred blueprint
-    Bytes.fromHexUnchecked "59045001010029800aba4aba2aba1aba0aab9faab9eaab9dab9cab9a4888888888c966002646465300130073754003370e90004c02c00e601600491112cc004cdc3a400800913259800801402626464660020020044464b30010028cc0048c054c0580066eb0c050c044dd5003cdd6180a180a980a980a980a980a980a980a980a98089baa0079bab30143015301530153015301530153011375400e9111191919800800805112cc00400629462b30019800980d800c896600200314bd7044cc070c064c074004cc008008c07800501b488c8cc00400400c896600200314a115980099b8f375c603e00200714a31330020023020001406480ea444b30010028a6103d87a80008acc004c048006266e9520003301d301e0024bd70466002007301f00299b80001480050032030407091114c004dd7180d8024c0700126006007300100148888c966002603060406ea8012264b3001301930213754003132598009980498019bab30123023375400200f13259800980d98119baa0018998050089bae302730243754003132330010010112259800800c528456600266ebcc094c0a400400e2946266004004605400281190272042302630233754604c60466ea80062a6604292139657870656374206c6973742e686173286173736574732e706f6c6963696573286f75747075742e76616c7565292c20706f6c6963795f69642900164080604a604c60446ea8c094c088dd5000c54cc08124012d65787065637420536f6d6528696e70757429203d206c6973742e6174287265665f696e707574732c20696478290016407c660040186eb4c090c084dd500244c966002603260426ea800626601060046eacc044c088dd51812981318111baa30253022375400200d153302049013865787065637420536f6d6528496e707574207b206f75747075742c202e2e207d29203d206c6973742e617428696e707574732c20696478290016407c6600401e6eb4c090c084dd5002203c230030012266004004603800314a080a90191bac300430153754016899192cc00400601f00f807c03e26644b3001001899912cc004c038006264b300100180a44c96600200301580ac056264b3001301e003802c05901b1bad00180aa03c301b0014064602e6ea800e2b30013370e9001000c4c9660020030148992cc00400602b01580ac4c966002603c00700580b2036375a0030154078603600280c8c05cdd5001c04d014202813005301900630143754003011808c04602280d0dd70009809801203030110013014002404860040046eac00a013009804a024300f300c375400b15980099b87480180122646644b300130060018a518acc004cdc3a400400314a314a0806100c1bad3010001300c37546020602200260186ea80162941009201218051805800980500098029baa00b8a4d15330034911856616c696461746f722072657475726e65642066616c7365001365640082a6600492012072656465656d65723a2050616972733c506f6c69637949642c20496e6465783e001601"
 
 
 main =
@@ -275,11 +266,20 @@ update msg model =
                                 (JD.maybe (JD.field "parameters" JD.value) |> JD.map (\p -> Maybe.map (always True) p |> Maybe.withDefault False))
                             )
                         )
+
+                loadLockBlueprint =
+                    Http.get
+                        { url = "lock-plutus.json"
+                        , expect = Http.expectJson GotBlueprint blueprintDecoder
+                        }
+
+                loadBadgesBlueprint =
+                    Http.get
+                        { url = "badges-plutus.json"
+                        , expect = Http.expectJson GotBlueprint blueprintDecoder
+                        }
               in
-              Http.get
-                { url = "lock/plutus.json"
-                , expect = Http.expectJson GotBlueprint blueprintDecoder
-                }
+              Cmd.batch [ loadLockBlueprint, loadBadgesBlueprint ]
             )
 
         ( GotBlueprint result, WalletLoaded w _ ) ->
@@ -291,55 +291,70 @@ update msg model =
                     -- Handle error as needed
                     ( WalletLoaded w { errors = Debug.toString err }, Cmd.none )
 
+        ( GotBlueprint result, BlueprintLoaded w loadedScripts _ ) ->
+            case result of
+                Ok scripts ->
+                    ( BlueprintLoaded w (scripts ++ loadedScripts) { errors = "" }, Cmd.none )
+
+                Err err ->
+                    -- Handle error as needed
+                    ( BlueprintLoaded w loadedScripts { errors = Debug.toString err }, Cmd.none )
+
         ( PickUtxoParam, BlueprintLoaded w scripts { errors } ) ->
             case List.head (Dict.Any.keys w.utxos) of
                 Just headUtxo ->
                     let
                         appliedMint =
-                            List.Extra.find (\{ name } -> name == "unique.mint_unique.mint") scripts
+                            List.Extra.find (\{ name } -> name == "mint_badge.mint_badge.mint") scripts
                                 |> Result.fromMaybe "Mint script not found in blueprint"
                                 |> Result.map (\blueprint -> Script.plutusScriptFromBytes PlutusV3 blueprint.scriptBytes)
                                 |> Result.andThen (Uplc.applyParamsToScript [ Utxo.outputReferenceToData headUtxo ])
 
-                        lockScriptResult =
-                            List.Extra.find (\{ name } -> name == "lock.lock.spend") scripts
-                                |> Result.fromMaybe "Lock script not found in blueprint"
+                        badgesScriptResult =
+                            List.Extra.find (\{ name } -> name == "check_badges.check_badges.withdraw") scripts
+                                |> Result.fromMaybe "Badges script not found in blueprint"
                                 |> Result.map (\blueprint -> Script.plutusScriptFromBytes PlutusV3 blueprint.scriptBytes)
-                    in
-                    case ( appliedMint, lockScriptResult ) of
-                        ( Ok plutusScript, Ok plutusLockScript ) ->
-                            ( ParametersSet
+
+                        appliedLock =
+                            case badgesScriptResult of
+                                Ok badgesScript ->
+                                    let
+                                        badgesScriptHash =
+                                            Script.hash (Script.Plutus badgesScript)
+                                    in
+                                    List.Extra.find (\{ name } -> name == "lock.lock.spend") scripts
+                                        |> Result.fromMaybe "Lock script not found in blueprint"
+                                        |> Result.map (\blueprint -> Script.plutusScriptFromBytes PlutusV3 blueprint.scriptBytes)
+                                        |> Result.andThen (Uplc.applyParamsToScript [ Data.Bytes <| Bytes.toAny badgesScriptHash ])
+
+                                Err err ->
+                                    Err err
+
+                        modelWithAppliedScripts badgesScript mintScript lockScript =
+                            ParametersSet
                                 { loadedWallet = w
                                 , localStateUtxos = w.utxos
                                 , tokenCredScript =
-                                    { hash = tokenCredScriptHash
-                                    , plutus = Script.plutusScriptFromBytes PlutusV3 tokenCredScriptBytes
+                                    { hash = Script.hash <| Script.Plutus badgesScript
+                                    , plutus = badgesScript
                                     }
                                 , uniqueMint =
                                     { pickedUtxo = headUtxo
-                                    , appliedScript = plutusScript
+                                    , appliedScript = mintScript
                                     }
                                 , lockScript =
                                     { address =
                                         Address.script
                                             (Address.extractNetworkId w.changeAddress |> Maybe.withDefault Testnet)
-                                            (Script.hash <| Script.Plutus plutusLockScript)
-                                    , plutus = plutusLockScript
+                                            (Script.hash <| Script.Plutus lockScript)
+                                    , plutus = lockScript
                                     }
                                 }
                                 { errors = errors }
-                            , Cmd.none
-                            )
-
-                        ( Err err, _ ) ->
-                            ( BlueprintLoaded w scripts { errors = Debug.toString err }
-                            , Cmd.none
-                            )
-
-                        ( _, Err err ) ->
-                            ( BlueprintLoaded w scripts { errors = Debug.toString err }
-                            , Cmd.none
-                            )
+                    in
+                    Result.map3 modelWithAppliedScripts badgesScriptResult appliedMint appliedLock
+                        |> Result.map (\newModel -> ( newModel, Cmd.none ))
+                        |> Result.Extra.extract (\err -> ( BlueprintLoaded w scripts { errors = Debug.toString err }, Cmd.none ))
 
                 Nothing ->
                     ( BlueprintLoaded w scripts { errors = "Selected wallet has no UTxO." }
@@ -495,15 +510,10 @@ update msg model =
                     { transactionId = txId, outputIndex = 0 }
 
                 ( tokenCredIntents, tokenCredOtherInfo ) =
-                    TokenCred.checkOwnership networkId tokenCredScriptConfig ctx.localStateUtxos tokenProofs
+                    TokenCred.checkOwnership networkId ctx.tokenCredScript ctx.localStateUtxos tokenProofs
 
                 networkId =
                     Address.extractNetworkId ctx.loadedWallet.changeAddress |> Maybe.withDefault Testnet
-
-                tokenCredScriptConfig =
-                    { hash = tokenCredScriptHash
-                    , plutus = Script.plutusScriptFromBytes Script.PlutusV3 tokenCredScriptBytes
-                    }
 
                 tokenProofs =
                     [ { policyId = Script.hash <| Script.Plutus ctx.uniqueMint.appliedScript
@@ -532,7 +542,7 @@ update msg model =
                         )
                     , redeemerData =
                         \txContext ->
-                            TokenCred.findWithdrawalRedeemerIndex tokenCredScriptHash txContext.redeemers txContext.withdrawals
+                            TokenCred.findWithdrawalRedeemerIndex ctx.tokenCredScript.hash txContext.redeemers txContext.withdrawals
                                 |> Maybe.withDefault -1
                                 |> Integer.fromSafeInt
                                 |> Data.Int
@@ -633,7 +643,7 @@ view model =
         WalletLoaded loadedWallet { errors } ->
             div []
                 (viewLoadedWallet loadedWallet
-                    ++ [ button [ onClick LoadBlueprintButtonClicked ] [ text "Load Blueprint" ]
+                    ++ [ button [ onClick LoadBlueprintButtonClicked ] [ text "Load Blueprints" ]
                        , displayErrors errors
                        ]
                 )

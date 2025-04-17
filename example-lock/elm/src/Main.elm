@@ -1,5 +1,6 @@
 port module Main exposing (main)
 
+import Badges exposing (Ownership(..))
 import Browser
 import Bytes.Comparable as Bytes exposing (Bytes)
 import Bytes.Map
@@ -24,7 +25,6 @@ import Json.Decode as JD exposing (Decoder, Value)
 import List.Extra
 import Natural
 import Result.Extra
-import TokenCred exposing (TokenOwner(..))
 
 
 main =
@@ -87,7 +87,7 @@ type alias ScriptBlueprint =
 type alias AppContext =
     { loadedWallet : LoadedWallet
     , localStateUtxos : Utxo.RefDict Output
-    , tokenCredScript : { hash : Bytes CredentialHash, plutus : PlutusScript }
+    , badgesScript : { hash : Bytes CredentialHash, plutus : PlutusScript }
     , uniqueMint : { pickedUtxo : OutputReference, appliedScript : PlutusScript }
     , lockScript : { address : Address, plutus : PlutusScript }
     }
@@ -334,7 +334,7 @@ update msg model =
                             ParametersSet
                                 { loadedWallet = w
                                 , localStateUtxos = w.utxos
-                                , tokenCredScript =
+                                , badgesScript =
                                     { hash = Script.hash <| Script.Plutus badgesScript
                                     , plutus = badgesScript
                                     }
@@ -378,15 +378,15 @@ update msg model =
                     -- Register the script cred
                     , IssueCertificate <|
                         RegisterStake
-                            { delegator = Witness.WithScript ctx.tokenCredScript.hash <| Witness.Plutus registerWitness
+                            { delegator = Witness.WithScript ctx.badgesScript.hash <| Witness.Plutus registerWitness
                             , deposit = depositAmount
                             }
                     ]
 
                 registerWitness =
                     { script =
-                        ( Script.plutusVersion ctx.tokenCredScript.plutus
-                        , Witness.ByValue <| Script.cborWrappedBytes ctx.tokenCredScript.plutus
+                        ( Script.plutusVersion ctx.badgesScript.plutus
+                        , Witness.ByValue <| Script.cborWrappedBytes ctx.badgesScript.plutus
                         )
                     , redeemerData = \_ -> Data.List []
                     , requiredSigners = []
@@ -509,13 +509,13 @@ update msg model =
                 lockedUtxo =
                     { transactionId = txId, outputIndex = 0 }
 
-                ( tokenCredIntents, tokenCredOtherInfo ) =
-                    TokenCred.checkOwnership networkId ctx.tokenCredScript ctx.localStateUtxos tokenProofs
+                ( badgesTxIntents, badgesTxOtherInfo ) =
+                    Badges.checkOwnership networkId ctx.badgesScript ctx.localStateUtxos presentedBadges
 
                 networkId =
                     Address.extractNetworkId ctx.loadedWallet.changeAddress |> Maybe.withDefault Testnet
 
-                tokenProofs =
+                presentedBadges =
                     [ { policyId = Script.hash <| Script.Plutus ctx.uniqueMint.appliedScript
                       , ownerType = ReferencedTokenAtPubkeyAddress
                       }
@@ -542,14 +542,14 @@ update msg model =
                         )
                     , redeemerData =
                         \txContext ->
-                            TokenCred.findWithdrawalRedeemerIndex ctx.tokenCredScript.hash txContext.redeemers txContext.withdrawals
+                            Badges.findWithdrawalRedeemerIndex ctx.badgesScript.hash txContext.redeemers txContext.withdrawals
                                 |> Maybe.withDefault -1
                                 |> Integer.fromSafeInt
                                 |> Data.Int
                     , requiredSigners = []
                     }
             in
-            case TxIntent.finalize ctx.localStateUtxos tokenCredOtherInfo (unlockingIntents ++ tokenCredIntents) of
+            case TxIntent.finalize ctx.localStateUtxos badgesTxOtherInfo (unlockingIntents ++ badgesTxIntents) of
                 Ok tx ->
                     let
                         _ =
@@ -678,7 +678,7 @@ view model =
                     ++ [ div [] [ text <| "☑️ Picked UTxO: " ++ Utxo.refAsString ctx.uniqueMint.pickedUtxo ]
                        , div [] [ text <| "Minted token policy ID used as credential: " ++ Bytes.toHex mintScriptHash ]
                        , div [] [ text <| "Lock script hash: " ++ Bytes.toHex lockScriptHash ]
-                       , div [] [ text <| "Token-cred script hash: " ++ Bytes.toHex ctx.tokenCredScript.hash ]
+                       , div [] [ text <| "Token-cred script hash: " ++ Bytes.toHex ctx.badgesScript.hash ]
                        , button [ onClick MintTokenKeyButtonClicked ] [ text "Mint the token key" ]
                        , button [ onClick RegisterButtonClicked ] [ text "Register the token cred script (do only if needed)" ]
                        , displayErrors errors

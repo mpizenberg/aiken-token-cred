@@ -1,13 +1,13 @@
-module TokenCred exposing
+module Badges exposing
     ( findWithdrawalRedeemerIndex
-    , checkOwnership, ScriptConfig, TokenProof, TokenOwner(..)
+    , checkOwnership, ScriptConfig, PresentedBadge, Ownership(..)
     )
 
-{-| Helper functions to interact with the token-cred authentication scripts.
+{-| Helper functions to interact with the badge authentication scripts.
 
 @docs findWithdrawalRedeemerIndex
 
-@docs checkOwnership, ScriptConfig, TokenProof, TokenOwner
+@docs checkOwnership, ScriptConfig, PresentedBadge, Ownership
 
 -}
 
@@ -29,22 +29,22 @@ import Natural exposing (Natural)
 
 
 {-| Find the index of the withdrawal redeemer in the script context
-corresponding to the token-cred withdrawal script.
+corresponding to the `check_badges` withdraw validator.
 -}
 findWithdrawalRedeemerIndex : Bytes CredentialHash -> List Redeemer -> List ( StakeAddress, Natural ) -> Maybe Int
-findWithdrawalRedeemerIndex tokenCredScriptHash redeemers withdrawals =
+findWithdrawalRedeemerIndex checkBadgesScriptHash redeemers withdrawals =
     let
-        -- Check if the current redeemer is the one of the token-cred script
-        isTokenCredWithdrawalRedeemer redeemer =
+        -- Check if the current redeemer is the one of the `check_badges` withdraw validator
+        isBadgesWithdrawalRedeemer redeemer =
             (redeemer.tag == Redeemer.Reward)
                 && (Just redeemer.index == withdrawalIndex)
 
         withdrawalIndex =
             List.Extra.findIndex
-                (\( { stakeCredential }, _ ) -> stakeCredential == ScriptHash tokenCredScriptHash)
+                (\( { stakeCredential }, _ ) -> stakeCredential == ScriptHash checkBadgesScriptHash)
                 withdrawals
     in
-    List.Extra.findIndex isTokenCredWithdrawalRedeemer redeemers
+    List.Extra.findIndex isBadgesWithdrawalRedeemer redeemers
 
 
 type alias ScriptConfig =
@@ -53,20 +53,20 @@ type alias ScriptConfig =
     }
 
 
-type alias TokenProof =
+type alias PresentedBadge =
     { policyId : Bytes PolicyId
-    , ownerType : TokenOwner
+    , ownerType : Ownership
     }
 
 
-type TokenOwner
+type Ownership
     = SpentToken
     | ReferencedTokenAtPubkeyAddress
     | ReferencedTokenAtScriptAddress { withdrawAmount : Natural, scriptWitness : Witness.Script }
 
 
-{-| Build the TxIntent leveraging the token-cred withdrawal script
-to verify ownership proofs of the provided tokens.
+{-| Build the TxIntent leveraging the `check_badges` withdraw validator
+to verify ownership proofs of the provided badges.
 
 WARNING: It’s your responsibility to make sure there is no duplicate token.
 It’s also your responsability to guarantee that UTxO references are present in localStateUtxos.
@@ -76,11 +76,11 @@ This function automates the discovery of the relevant indexes
 to be provided to the redeemer thanks to its access to the TxContext.
 
 -}
-checkOwnership : NetworkId -> ScriptConfig -> Utxo.RefDict Output -> List TokenProof -> ( List TxIntent, List TxOtherInfo )
-checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
+checkOwnership : NetworkId -> ScriptConfig -> Utxo.RefDict Output -> List PresentedBadge -> ( List TxIntent, List TxOtherInfo )
+checkOwnership networkId scriptConfig localStateUtxos presentedBadges =
     let
-        -- Helper function creating one redeemer pair for the token-cred withdrawal script
-        policyRedeemerEntry : TxContext -> TokenProof -> ( Data, Data )
+        -- Helper function creating one redeemer pair for the `check_badges` withdraw validator
+        policyRedeemerEntry : TxContext -> PresentedBadge -> ( Data, Data )
         policyRedeemerEntry txContext { policyId, ownerType } =
             case ownerType of
                 -- If the token is spent, we provide its UTxO index in the inputs
@@ -100,7 +100,7 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
                 |> List.Extra.findIndex (\( _, output ) -> Bytes.Map.member policyId output.amount.assets)
                 |> Maybe.withDefault -1
 
-        -- Helper definition to create the Plutus script witness for the main token-cred withdrawal script
+        -- Helper definition to create the Plutus script witness for the main check_badges withdraw validator
         witness : Witness.PlutusScript
         witness =
             { script =
@@ -108,23 +108,23 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
                 , Witness.ByValue <| Script.cborWrappedBytes scriptConfig.plutus
                 )
             , redeemerData =
-                \txContext -> Data.Map (List.map (policyRedeemerEntry txContext) tokenProofs)
+                \txContext -> Data.Map (List.map (policyRedeemerEntry txContext) presentedBadges)
 
             -- The token is hold in a UTxO in our wallet,
             -- so we need to add our payment credential to the required signers.
             , requiredSigners =
-                List.filterMap extractTokenKeyHolder tokenProofs
+                List.filterMap extractTokenKeyHolder presentedBadges
             }
 
         -- Helper function looking for the pubkey credential currently owning that token.
         -- Returns Nothing if the token is held by a script.
         -- since in that case the contract doesn’t need looking for proof, it’s in the pudding, euh spending.
-        extractTokenKeyHolder : TokenProof -> Maybe (Bytes CredentialHash)
-        extractTokenKeyHolder tokenProof =
-            case tokenProof.ownerType of
+        extractTokenKeyHolder : PresentedBadge -> Maybe (Bytes CredentialHash)
+        extractTokenKeyHolder badge =
+            case badge.ownerType of
                 ReferencedTokenAtPubkeyAddress ->
                     relevantOutputs
-                        |> List.Extra.find (\output -> Bytes.Map.member tokenProof.policyId output.amount.assets)
+                        |> List.Extra.find (\output -> Bytes.Map.member badge.policyId output.amount.assets)
                         |> Maybe.andThen (\output -> Address.extractPubKeyHash output.address)
 
                 _ ->
@@ -139,25 +139,25 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
         relevantUtxos : Utxo.RefDict Output
         relevantUtxos =
             localStateUtxos
-                |> Dict.Any.filter (\_ output -> outputContainsSomeTokenProof output)
+                |> Dict.Any.filter (\_ output -> outputContainsSomeBadge output)
 
-        outputContainsSomeTokenProof output =
+        outputContainsSomeBadge output =
             Bytes.Map.keys output.amount.assets
-                |> List.any (\assetPolicyId -> Bytes.Map.member assetPolicyId tokenProofsAsMap)
+                |> List.any (\assetPolicyId -> Bytes.Map.member assetPolicyId presentedBadgesAsMap)
 
-        tokenProofsAsMap : BytesMap PolicyId TokenOwner
-        tokenProofsAsMap =
-            List.map (\{ policyId, ownerType } -> ( policyId, ownerType )) tokenProofs
+        presentedBadgesAsMap : BytesMap PolicyId Ownership
+        presentedBadgesAsMap =
+            List.map (\{ policyId, ownerType } -> ( policyId, ownerType )) presentedBadges
                 |> Bytes.Map.fromList
 
         -- Prepare the list of UTxOs to be added to the reference inputs
         -- because they hold the tokens used as credential
         referencedOutputs : List OutputReference
         referencedOutputs =
-            tokenProofs
+            presentedBadges
                 |> List.filterMap
-                    (\tokenProof ->
-                        case tokenProof.ownerType of
+                    (\badge ->
+                        case badge.ownerType of
                             SpentToken ->
                                 -- Discard if token is spent
                                 Nothing
@@ -165,23 +165,23 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
                             _ ->
                                 -- Look for the output ref if the token is referenced
                                 Dict.Any.toList relevantUtxos
-                                    |> List.Extra.find (\( _, output ) -> Bytes.Map.member tokenProof.policyId output.amount.assets)
+                                    |> List.Extra.find (\( _, output ) -> Bytes.Map.member badge.policyId output.amount.assets)
                                     |> Maybe.map (\( ref, _ ) -> ref)
                     )
 
-        -- Prepare the withdraw intents for each token held at a script address
-        withdrawIntentsForTokensAtScriptAddresses : List TxIntent
-        withdrawIntentsForTokensAtScriptAddresses =
-            tokenProofs
+        -- Prepare the withdraw intents for each badge held at a script address
+        withdrawIntentsForBadgesAtScriptAddresses : List TxIntent
+        withdrawIntentsForBadgesAtScriptAddresses =
+            presentedBadges
                 |> List.filterMap
-                    (\tokenProof ->
-                        case tokenProof.ownerType of
+                    (\badge ->
+                        case badge.ownerType of
                             ReferencedTokenAtScriptAddress { withdrawAmount, scriptWitness } ->
                                 Just <|
                                     WithdrawRewards
                                         { stakeCredential =
                                             { networkId = networkId
-                                            , stakeCredential = ScriptHash tokenProof.policyId
+                                            , stakeCredential = ScriptHash badge.policyId
                                             }
                                         , amount = withdrawAmount
                                         , scriptWitness = Just scriptWitness
@@ -191,7 +191,7 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
                                 Nothing
                     )
     in
-    -- Main token-cred withdrawal
+    -- Main check_badges withdrawal
     ( WithdrawRewards
         { stakeCredential =
             { networkId = networkId
@@ -201,7 +201,7 @@ checkOwnership networkId scriptConfig localStateUtxos tokenProofs =
         , scriptWitness = Just <| Witness.Plutus witness
         }
         -- Additional withdrawals for every referenced token at a script address
-        :: withdrawIntentsForTokensAtScriptAddresses
+        :: withdrawIntentsForBadgesAtScriptAddresses
       -- Create a TxOtherIntent for each reference output containing one of the tokens
     , List.map TxReferenceInput referencedOutputs
     )

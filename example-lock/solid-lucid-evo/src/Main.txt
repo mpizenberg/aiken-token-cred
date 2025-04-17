@@ -1,0 +1,675 @@
+import { createSignal, createEffect, Show } from "solid-js";
+import * as Cip30 from "./cardano/cip30";
+import * as Address from "./cardano/address";
+import * as TxIntent from "./cardano/txIntent";
+import * as Transaction from "./cardano/transaction";
+import * as Script from "./cardano/script";
+import * as Utxo from "./cardano/utxo";
+import * as Value from "./cardano/value";
+import * as Bytes from "./cardano/bytes";
+import * as Badges from "./cardano/badges";
+import * as Uplc from "./cardano/uplc";
+import * as Data from "./cardano/data";
+import * as Integer from "./cardano/integer";
+import * as Natural from "./cardano/natural";
+import * as Witness from "./cardano/witness";
+
+function App() {
+  // Model equivalent
+  const [state, setState] = createSignal("Startup");
+  const [wallets, setWallets] = createSignal([]);
+  const [loadingState, setLoadingState] = createSignal({});
+  const [loadedWallet, setLoadedWallet] = createSignal(null);
+  const [scripts, setScripts] = createSignal([]);
+  const [errors, setErrors] = createSignal("");
+  const [appContext, setAppContext] = createSignal(null);
+  const [txId, setTxId] = createSignal(null);
+  const [signingState, setSigningState] = createSignal(null);
+  const [submittingState, setSubmittingState] = createSignal(null);
+  
+  // Port equivalent for wallet communication
+  let walletCallback = null;
+  
+  function toWallet(value) {
+    // In a real implementation, this would communicate with the wallet
+    // For now we'll just log it
+    console.log("To wallet:", value);
+    
+    // Simulate wallet response for demo purposes
+    simulateWalletResponse(value);
+  }
+  
+  function fromWallet(callback) {
+    walletCallback = callback;
+  }
+  
+  function simulateWalletResponse(request) {
+    // This simulates the wallet's response to requests
+    // In a real implementation, this would be handled by the actual wallet
+    setTimeout(() => {
+      if (request.method === "cardano_discoverWallets") {
+        walletCallback({ 
+          type: "availableWallets", 
+          wallets: [
+            { id: "wallet1", name: "Nami", icon: "nami-icon.png" },
+            { id: "wallet2", name: "Eternl", icon: "eternl-icon.png" }
+          ]
+        });
+      }
+      // Other wallet responses would be simulated here
+    }, 100);
+  }
+  
+  // Initialize the application
+  createEffect(() => {
+    if (state() === "Startup") {
+      toWallet(Cip30.encodeRequest(Cip30.discoverWallets()));
+    }
+  });
+  
+  // Handle wallet messages
+  fromWallet((value) => handleWalletMsg(value));
+  
+  function handleWalletMsg(value) {
+    try {
+      const response = Cip30.responseDecoder(value);
+      
+      switch (response.type) {
+        case "AvailableWallets":
+          if (state() === "Startup") {
+            setWallets(response.wallets);
+            setState("WalletDiscovered");
+          }
+          break;
+          
+        case "EnabledWallet":
+          if (state() === "WalletDiscovered") {
+            setLoadingState({ wallet: response.wallet, utxos: [] });
+            setState("WalletLoading");
+            toWallet(Cip30.encodeRequest(Cip30.getUtxos(response.wallet, { amount: null, paginate: null })));
+          }
+          break;
+          
+        case "ApiResponse":
+          handleApiResponse(response.data);
+          break;
+          
+        case "ApiError":
+          setErrors(response.info);
+          break;
+      }
+    } catch (error) {
+      console.error("Error handling wallet message:", error);
+    }
+  }
+  
+  function handleApiResponse(data) {
+    if (data.type === "WalletUtxos" && state() === "WalletLoading") {
+      const { wallet } = loadingState();
+      setLoadingState({ wallet, utxos: data.utxos });
+      toWallet(Cip30.encodeRequest(Cip30.getChangeAddress(wallet)));
+    }
+    else if (data.type === "ChangeAddress" && state() === "WalletLoading") {
+      const { wallet, utxos } = loadingState();
+      setLoadedWallet({ 
+        wallet: wallet, 
+        utxos: Utxo.refDictFromList(utxos), 
+        changeAddress: data.address 
+      });
+      setState("WalletLoaded");
+      setErrors("");
+    }
+    else if (data.type === "SignedTx" && state() === "Signing") {
+      const { ctx, action, tx } = signingState();
+      // Update the signatures of the Tx with the wallet response
+      const signedTx = Transaction.updateSignatures(() => data.vkeywitnesses, tx.tx);
+      console.log("Signed Tx", signedTx);
+      
+      setSubmittingState({ ctx, action, tx: signedTx });
+      setState("Submitting");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.submitTx(ctx.loadedWallet.wallet, signedTx)));
+    }
+    else if (data.type === "SubmittedTx" && state() === "Submitting") {
+      const { ctx, action, tx } = submittingState();
+      const { updatedState } = TxIntent.updateLocalState(data.txId, tx, ctx.localStateUtxos);
+      
+      const updatedCtx = { ...ctx, localStateUtxos: updatedState };
+      setAppContext(updatedCtx);
+      setTxId(data.txId);
+      setErrors("");
+      
+      switch (action) {
+        case "Registering":
+          setState("ParametersSet");
+          break;
+        case "MintingTokenKey":
+          setState("TokenMintingDone");
+          break;
+        case "BurningTokenKey":
+          setState("TokenBurningDone");
+          break;
+        case "Locking":
+          setState("LockingDone");
+          break;
+        case "Unlocking":
+          setState("UnlockingDone");
+          break;
+      }
+    }
+  }
+  
+  function connectWallet(id) {
+    toWallet(Cip30.encodeRequest(Cip30.enableWallet({ id, extensions: [] })));
+  }
+  
+  function loadBlueprint() {
+    const handleBlueprint = (result) => {
+      if (result.ok) {
+        setScripts([...scripts(), ...result.data]);
+        setState("BlueprintLoaded");
+        setErrors("");
+      } else {
+        setErrors(result.error.toString());
+      }
+    };
+    
+    // In a real app, this would be fetch calls to the JSON files
+    Promise.all([
+      fetch("lock-plutus.json").then(r => r.json()),
+      fetch("badges-plutus.json").then(r => r.json())
+    ]).then(([lockData, badgesData]) => {
+      const blueprints = [...lockData.validators, ...badgesData.validators].map(v => ({
+        name: v.title,
+        scriptBytes: Bytes.fromHexUnchecked(v.compiledCode),
+        hash: Bytes.fromHexUnchecked(v.hash),
+        hasParams: v.parameters !== undefined
+      }));
+      handleBlueprint({ ok: true, data: blueprints });
+    }).catch(err => {
+      handleBlueprint({ ok: false, error: err });
+    });
+  }
+  
+  function pickUtxoParam() {
+    const wallet = loadedWallet();
+    const utxoKeys = Object.keys(wallet.utxos);
+    
+    if (utxoKeys.length === 0) {
+      setErrors("Selected wallet has no UTxO.");
+      return;
+    }
+    
+    const headUtxo = utxoKeys[0];
+    
+    try {
+      // Find mint script in blueprint
+      const mintBlueprint = scripts().find(s => s.name === "mint_badge.mint_badge.mint");
+      if (!mintBlueprint) throw new Error("Mint script not found in blueprint");
+      
+      const mintScript = Script.plutusScriptFromBytes("PlutusV3", mintBlueprint.scriptBytes);
+      const appliedMint = Uplc.applyParamsToScript([Utxo.outputReferenceToData(headUtxo)], mintScript);
+      
+      // Find badges script in blueprint
+      const badgesBlueprint = scripts().find(s => s.name === "check_badges.check_badges.withdraw");
+      if (!badgesBlueprint) throw new Error("Badges script not found in blueprint");
+      
+      const badgesScript = Script.plutusScriptFromBytes("PlutusV3", badgesBlueprint.scriptBytes);
+      const badgesScriptHash = Script.hash({ type: "Plutus", script: badgesScript });
+      
+      // Find lock script in blueprint
+      const lockBlueprint = scripts().find(s => s.name === "lock.lock.spend");
+      if (!lockBlueprint) throw new Error("Lock script not found in blueprint");
+      
+      const lockScript = Script.plutusScriptFromBytes("PlutusV3", lockBlueprint.scriptBytes);
+      const appliedLock = Uplc.applyParamsToScript([Data.Bytes(Bytes.toAny(badgesScriptHash))], lockScript);
+      
+      const networkId = Address.extractNetworkId(wallet.changeAddress) || "Testnet";
+      
+      setAppContext({
+        loadedWallet: wallet,
+        localStateUtxos: wallet.utxos,
+        badgesScript: {
+          hash: Script.hash({ type: "Plutus", script: badgesScript }),
+          plutus: badgesScript
+        },
+        uniqueMint: {
+          pickedUtxo: headUtxo,
+          appliedScript: appliedMint
+        },
+        lockScript: {
+          address: Address.script(networkId, Script.hash({ type: "Plutus", script: appliedLock })),
+          plutus: appliedLock
+        }
+      });
+      
+      setState("ParametersSet");
+      setErrors("");
+    } catch (err) {
+      setErrors(err.toString());
+    }
+  }
+  
+  function registerScript() {
+    const ctx = appContext();
+    const depositAmount = Natural.fromSafeInt(2000000);
+    
+    const registerIntents = [
+      {
+        type: "Spend",
+        data: {
+          type: "FromWallet",
+          address: ctx.loadedWallet.changeAddress,
+          value: Value.onlyLovelace(depositAmount),
+          guaranteedUtxos: []
+        }
+      },
+      {
+        type: "IssueCertificate",
+        data: {
+          type: "RegisterStake",
+          delegator: Witness.WithScript(ctx.badgesScript.hash, Witness.Plutus(registerWitness)),
+          deposit: depositAmount
+        }
+      }
+    ];
+    
+    const registerWitness = {
+      script: [
+        Script.plutusVersion(ctx.badgesScript.plutus),
+        Witness.ByValue(Script.cborWrappedBytes(ctx.badgesScript.plutus))
+      ],
+      redeemerData: () => Data.List([]),
+      requiredSigners: []
+    };
+    
+    try {
+      const result = TxIntent.finalize(ctx.localStateUtxos, [], registerIntents);
+      console.log("tx", Transaction.serialize(result.tx));
+      
+      setSigningState({ ctx, action: "Registering", tx: result });
+      setState("Signing");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.signTx(ctx.loadedWallet.wallet, { partialSign: true }, result.tx)));
+    } catch (err) {
+      setErrors(TxIntent.errorToString(err));
+    }
+  }
+  
+  function mintTokenKey() {
+    const ctx = appContext();
+    const policyId = Script.hash({ type: "Plutus", script: ctx.uniqueMint.appliedScript });
+    const emptyName = Bytes.fromHexUnchecked("");
+    
+    const mintingIntents = [
+      {
+        type: "Spend",
+        data: {
+          type: "FromWallet",
+          address: ctx.loadedWallet.changeAddress,
+          value: Value.zero(),
+          guaranteedUtxos: [ctx.uniqueMint.pickedUtxo]
+        }
+      },
+      {
+        type: "MintBurn",
+        data: {
+          policyId: policyId,
+          assets: { [emptyName]: Integer.one() },
+          scriptWitness: Witness.Plutus(mintWitness)
+        }
+      },
+      {
+        type: "SendTo",
+        address: ctx.loadedWallet.changeAddress,
+        value: Value.onlyToken(policyId, emptyName, Natural.one())
+      }
+    ];
+    
+    const mintWitness = {
+      script: [
+        Script.plutusVersion(ctx.uniqueMint.appliedScript),
+        Witness.ByValue(Script.cborWrappedBytes(ctx.uniqueMint.appliedScript))
+      ],
+      redeemerData: () => Data.List([]),
+      requiredSigners: []
+    };
+    
+    try {
+      const result = TxIntent.finalize(ctx.localStateUtxos, [], mintingIntents);
+      console.log("tx", Transaction.serialize(result.tx));
+      
+      setSigningState({ ctx, action: "MintingTokenKey", tx: result });
+      setState("Signing");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.signTx(ctx.loadedWallet.wallet, { partialSign: true }, result.tx)));
+    } catch (err) {
+      setErrors(TxIntent.errorToString(err));
+    }
+  }
+  
+  function lockAssets() {
+    const ctx = appContext();
+    const policyId = Script.hash({ type: "Plutus", script: ctx.uniqueMint.appliedScript });
+    const lockedValue = Value.onlyLovelace(Natural.fromSafeInt(2000000));
+    
+    const lockingIntents = [
+      {
+        type: "Spend",
+        data: {
+          type: "FromWallet",
+          address: ctx.loadedWallet.changeAddress,
+          value: lockedValue,
+          guaranteedUtxos: []
+        }
+      },
+      {
+        type: "SendToOutput",
+        data: {
+          address: ctx.lockScript.address,
+          amount: lockedValue,
+          datumOption: Utxo.datumValueFromData(Data.Bytes(Bytes.toAny(policyId))),
+          referenceScript: null
+        }
+      }
+    ];
+    
+    try {
+      const result = TxIntent.finalize(ctx.localStateUtxos, [], lockingIntents);
+      console.log("tx", Transaction.serialize(result.tx));
+      
+      setSigningState({ ctx, action: "Locking", tx: result });
+      setState("Signing");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.signTx(ctx.loadedWallet.wallet, { partialSign: true }, result.tx)));
+    } catch (err) {
+      setErrors(TxIntent.errorToString(err));
+    }
+  }
+  
+  function unlockAssets() {
+    const ctx = appContext();
+    const lockedValue = Value.onlyLovelace(Natural.fromSafeInt(2000000));
+    
+    // The locked UTxO was the first output of the locking transaction
+    const lockedUtxo = { transactionId: txId(), outputIndex: 0 };
+    
+    const networkId = Address.extractNetworkId(ctx.loadedWallet.changeAddress) || "Testnet";
+    
+    const presentedBadges = [
+      { 
+        policyId: Script.hash({ type: "Plutus", script: ctx.uniqueMint.appliedScript }),
+        ownerType: "ReferencedTokenAtPubkeyAddress"
+      }
+    ];
+    
+    const { intents: badgesTxIntents, otherInfo: badgesTxOtherInfo } = 
+      Badges.checkOwnership(networkId, ctx.badgesScript, ctx.localStateUtxos, presentedBadges);
+    
+    const unlockingIntents = [
+      {
+        type: "Spend",
+        data: {
+          type: "FromPlutusScript",
+          spentInput: lockedUtxo,
+          datumWitness: null,
+          plutusScriptWitness: unlockWitness
+        }
+      },
+      {
+        type: "SendTo",
+        address: ctx.loadedWallet.changeAddress,
+        value: lockedValue
+      }
+    ];
+    
+    const unlockWitness = {
+      script: [
+        Script.plutusVersion(ctx.lockScript.plutus),
+        Witness.ByValue(Script.cborWrappedBytes(ctx.lockScript.plutus))
+      ],
+      redeemerData: (txContext) => {
+        const index = Badges.findWithdrawalRedeemerIndex(
+          ctx.badgesScript.hash, 
+          txContext.redeemers, 
+          txContext.withdrawals
+        ) || -1;
+        return Data.Int(Integer.fromSafeInt(index));
+      },
+      requiredSigners: []
+    };
+    
+    try {
+      const result = TxIntent.finalize(
+        ctx.localStateUtxos, 
+        badgesTxOtherInfo, 
+        [...unlockingIntents, ...badgesTxIntents]
+      );
+      
+      console.log("tx", Transaction.serialize(result.tx));
+      
+      setSigningState({ ctx, action: "Unlocking", tx: result });
+      setState("Signing");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.signTx(ctx.loadedWallet.wallet, { partialSign: true }, result.tx)));
+    } catch (err) {
+      setErrors(TxIntent.errorToString(err));
+    }
+  }
+  
+  function burnTokenKey() {
+    const ctx = appContext();
+    const policyId = Script.hash({ type: "Plutus", script: ctx.uniqueMint.appliedScript });
+    const emptyName = Bytes.fromHexUnchecked("");
+    
+    const burningIntents = [
+      {
+        type: "Spend",
+        data: {
+          type: "FromWallet",
+          address: ctx.loadedWallet.changeAddress,
+          value: Value.onlyToken(policyId, emptyName, Natural.one()),
+          guaranteedUtxos: []
+        }
+      },
+      {
+        type: "MintBurn",
+        data: {
+          policyId: policyId,
+          assets: { [emptyName]: Integer.negativeOne() },
+          scriptWitness: Witness.Plutus(mintWitness)
+        }
+      }
+    ];
+    
+    const mintWitness = {
+      script: [
+        Script.plutusVersion(ctx.uniqueMint.appliedScript),
+        Witness.ByValue(Script.cborWrappedBytes(ctx.uniqueMint.appliedScript))
+      ],
+      redeemerData: () => Data.List([]),
+      requiredSigners: []
+    };
+    
+    try {
+      const result = TxIntent.finalize(ctx.localStateUtxos, [], burningIntents);
+      console.log("tx", Transaction.serialize(result.tx));
+      
+      setSigningState({ ctx, action: "BurningTokenKey", tx: result });
+      setState("Signing");
+      setErrors("");
+      
+      toWallet(Cip30.encodeRequest(Cip30.signTx(ctx.loadedWallet.wallet, { partialSign: true }, result.tx)));
+    } catch (err) {
+      setErrors(TxIntent.errorToString(err));
+    }
+  }
+  
+  function trySubmitAgain() {
+    const { ctx, tx } = submittingState();
+    setErrors("");
+    toWallet(Cip30.encodeRequest(Cip30.submitTx(ctx.loadedWallet.wallet, tx)));
+  }
+  
+  // Display components
+  function displayErrors() {
+    if (!errors()) return null;
+    
+    return (
+      <pre style={{ color: "red" }}>
+        <b>ERRORS: </b>{errors()}
+      </pre>
+    );
+  }
+  
+  function viewLoadedWallet(wallet) {
+    return (
+      <>
+        <div>Wallet: {wallet.wallet.name}</div>
+        <div>Address: {Bytes.toHex(Address.toBytes(wallet.changeAddress))}</div>
+        <div>UTxO count: {Object.keys(wallet.utxos).length}</div>
+      </>
+    );
+  }
+  
+  function viewAvailableWallets() {
+    return (
+      <div>
+        {wallets().map(wallet => (
+          <div>
+            <img src={wallet.icon} height={32} alt="wallet icon" />
+            {`id: ${wallet.id}, name: ${wallet.name}`}
+            <button onClick={() => connectWallet(wallet.id)}>connect</button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  
+  return (
+    <div>
+      <Show when={state() === "Startup"}>
+        <div>Hello Cardano!</div>
+      </Show>
+      
+      <Show when={state() === "WalletDiscovered"}>
+        <div>Hello Cardano!</div>
+        <div>CIP-30 wallets detected:</div>
+        {viewAvailableWallets()}
+      </Show>
+      
+      <Show when={state() === "WalletLoading"}>
+        <div>Loading wallet assets ...</div>
+      </Show>
+      
+      <Show when={state() === "WalletLoaded"}>
+        {viewLoadedWallet(loadedWallet())}
+        <button onClick={loadBlueprint}>Load Blueprints</button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "BlueprintLoaded"}>
+        {viewLoadedWallet(loadedWallet())}
+        {scripts().map(script => (
+          <div>
+            {script.hasParams
+              ? `(unapplied) ${script.name} (size: ${Bytes.width(script.scriptBytes)} bytes)`
+              : `☑️ ${script.name} (size: ${Bytes.width(script.scriptBytes)} bytes)`
+            }
+          </div>
+        ))}
+        <button onClick={pickUtxoParam}>
+          Auto-pick UTxO to be spent for unicity guarantee of the mint contract
+        </button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "ParametersSet"}>
+        {viewLoadedWallet(appContext().loadedWallet)}
+        <div>☑️ Picked UTxO: {Utxo.refAsString(appContext().uniqueMint.pickedUtxo)}</div>
+        <div>
+          Minted token policy ID used as credential: 
+          {Bytes.toHex(Script.hash({ type: "Plutus", script: appContext().uniqueMint.appliedScript }))}
+        </div>
+        <div>
+          Lock script hash: 
+          {Bytes.toHex(Script.hash({ type: "Plutus", script: appContext().lockScript.plutus }))}
+        </div>
+        <div>
+          Token-cred script hash: 
+          {Bytes.toHex(appContext().badgesScript.hash)}
+        </div>
+        <button onClick={mintTokenKey}>Mint the token key</button>
+        <button onClick={registerScript}>Register the token cred script (do only if needed)</button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "TokenMintingDone"}>
+        {viewLoadedWallet(appContext().loadedWallet)}
+        <div>Token minting done</div>
+        <div>Transaction ID: {Bytes.toHex(txId())}</div>
+        <button onClick={lockAssets}>Lock 2 Ada with the token as key</button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "LockingDone"}>
+        {viewLoadedWallet(appContext().loadedWallet)}
+        <div>Assets locking done</div>
+        <div>Transaction ID: {Bytes.toHex(txId())}</div>
+        <button onClick={unlockAssets}>Unlock the assets with the token as key</button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "UnlockingDone"}>
+        {viewLoadedWallet(appContext().loadedWallet)}
+        <div>Assets unlocked!</div>
+        <div>Transaction ID: {Bytes.toHex(txId())}</div>
+        <button onClick={burnTokenKey}>Burn the token key</button>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "TokenBurningDone"}>
+        {viewLoadedWallet(appContext().loadedWallet)}
+        <div>Token burning done</div>
+        <div>Transaction ID: {Bytes.toHex(txId())}</div>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "Signing"}>
+        {viewLoadedWallet(signingState().ctx.loadedWallet)}
+        <div>
+          Signing {signingState().action} Tx: 
+          {Bytes.toHex(Transaction.computeTxId(signingState().tx.tx))}
+        </div>
+        <div>
+          Expected signatures:
+          <div>
+            {signingState().tx.expectedSignatures.map(hash => (
+              <div>{Bytes.toHex(hash)}</div>
+            ))}
+          </div>
+        </div>
+        <pre>{Cardano.TxExamples.prettyTx(signingState().tx.tx)}</pre>
+        {displayErrors()}
+      </Show>
+      
+      <Show when={state() === "Submitting"}>
+        {viewLoadedWallet(submittingState().ctx.loadedWallet)}
+        <div>
+          Submitting {submittingState().action} Tx: 
+          {Bytes.toHex(Transaction.computeTxId(submittingState().tx))}
+        </div>
+        <button onClick={trySubmitAgain}>Try submitting again</button>
+        {displayErrors()}
+      </Show>
+    </div>
+  );
+}
+
+export default App;
+

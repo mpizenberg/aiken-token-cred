@@ -8,9 +8,11 @@ import {
   Koios,
   Lucid,
   LucidEvolution,
+  RewardAddress,
   UTxO,
   Validator,
   validatorToAddress,
+  validatorToRewardAddress,
   WalletApi,
 } from "@lucid-evolution/lucid";
 
@@ -32,6 +34,7 @@ type AppContext = {
   badgesScript: {
     hash: string;
     validator: Validator;
+    rewardAddress: RewardAddress;
   };
   uniqueMint: {
     pickedUtxo: UTxO;
@@ -159,6 +162,10 @@ function App() {
         type: "PlutusV3",
         script: applyDoubleCborEncoding(badgesBlueprint.scriptBytes),
       };
+      const badgesScriptRewardAddress: RewardAddress = validatorToRewardAddress(
+        network,
+        badgesScript,
+      );
 
       // Find lock script in blueprint
       const lockBlueprint = scripts().find((s) => s.name === "lock.lock.spend");
@@ -178,6 +185,7 @@ function App() {
         badgesScript: {
           hash: badgesScriptHash,
           validator: badgesScript,
+          rewardAddress: badgesScriptRewardAddress,
         },
         uniqueMint: {
           pickedUtxo: headUtxo,
@@ -198,6 +206,21 @@ function App() {
       setErrors(
         err?.toString() || "Unknown error while trying to pick UTxO parameter",
       );
+    }
+  }
+
+  async function registerScript() {
+    try {
+      const ctx = appContext()!;
+      const tx = await lucid!
+        .newTx()
+        .register.Stake(ctx.badgesScript.rewardAddress)
+        .attach.Script(ctx.badgesScript.validator)
+        .complete();
+      const signedTx = await tx.sign.withWallet().complete();
+      await signedTx.submit();
+    } catch (err) {
+      setErrors(err?.toString() || "Unknown error while registering script");
     }
   }
 
@@ -296,13 +319,11 @@ function App() {
         <div>Lock script hash: {appContext()!.lockScript.hash}</div>
         <div>Badges script hash: {appContext()!.badgesScript.hash}</div>
 
-        {
-          // TODO
-          /* <button onClick={mintTokenKey}>Mint the token key</button>
+        {/* <button onClick={mintTokenKey}>Mint the token key</button> */}
         <button onClick={registerScript}>
           Register the token cred script (do only if needed)
-        </button> */
-        }
+        </button>
+
         {viewErrors()}
       </Show>
     </div>

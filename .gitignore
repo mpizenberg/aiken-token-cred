@@ -1,3 +1,4 @@
+.env
 # Aiken compilation artifacts
 artifacts/
 *plutus.json

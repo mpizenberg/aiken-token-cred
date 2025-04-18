@@ -61,7 +61,10 @@ function App() {
   let lucid: LucidEvolution | null = null;
   (async () => {
     lucid = await Lucid(
-      new Koios("https://preview.koios.rest/api/v1"),
+      new Koios(
+        "https://preview.koios.rest/api/v1",
+        import.meta.env.VITE_KOIOS_API_KEY,
+      ),
       "Preview",
     );
   })();
@@ -287,14 +290,11 @@ function App() {
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>☑️ Picked UTxO: {appContext()!.uniqueMint.pickedUtxoRef}</div>
         <div>
-          Minted token policy ID used as credential:
+          Minted token policy ID used as credential:{" "}
           {appContext()!.uniqueMint.policyId}
         </div>
         <div>Lock script hash: {appContext()!.lockScript.hash}</div>
-        <div>
-          Badges script hash:
-          {appContext()!.badgesScript.hash}
-        </div>
+        <div>Badges script hash: {appContext()!.badgesScript.hash}</div>
 
         {
           // TODO

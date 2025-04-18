@@ -1,13 +1,6 @@
 "use strict";
 
-// Extending Window to include cardano
-declare global {
-  interface Window {
-    cardano?: {
-      [walletId: string]: Cip30Wallet | any;
-    };
-  }
-}
+import { WalletApi } from "@lucid-evolution/lucid";
 
 function cip30Discover(): Cip30Wallet[] {
   const wallets: Cip30Wallet[] = [];
@@ -39,7 +32,7 @@ export interface Cip30Wallet {
   apiVersion: string;
   supportedExtensions?: string[];
   isEnabled: () => Promise<boolean>;
-  enable: (extensions?: Array<{ cip: string }>) => Promise<Cip30Api>;
+  enable: (extensions?: Array<{ cip: string }>) => Promise<WalletApi>;
 }
 
 export interface Cip30Api {

@@ -1,9 +1,10 @@
 import { createSignal, Show } from "solid-js";
-import { Cip30Api, cip30Discover, Cip30Wallet } from "./Wallet.ts";
+import { cip30Discover, Cip30Wallet } from "./Wallet.ts";
+import { WalletApi } from "@lucid-evolution/lucid";
 
 type LoadedWallet = Cip30Wallet & {
-  api: Cip30Api;
-  utxos: Record<string, unknown>;
+  api: WalletApi;
+  utxos: string[] | undefined;
 };
 
 type State =

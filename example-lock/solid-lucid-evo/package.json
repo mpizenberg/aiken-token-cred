@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@cardano-foundation/cardano-connect-with-wallet-core": "^0.2.6",
     "@lucid-evolution/lucid": "^0.4.27",
     "solid-js": "^1.9.5"
   },

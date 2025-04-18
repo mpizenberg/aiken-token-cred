@@ -1,67 +1,29 @@
 import { createSignal, Show } from "solid-js";
-import {
-  Wallet,
-  NetworkType,
-} from "@cardano-foundation/cardano-connect-with-wallet-core";
+import { Cip30Api, cip30Discover, Cip30Wallet } from "./Wallet.ts";
 
-type WalletDescriptor = {
-  id: string;
-  name: string;
-};
-
-type LoadedWallet = {
-  id: string;
-  name: string;
-  stakeAddress: string | null;
+type LoadedWallet = Cip30Wallet & {
+  api: Cip30Api;
   utxos: Record<string, unknown>;
 };
 
+type State =
+  | "Startup"
+  | "WalletsDiscovered"
+  | "WalletConnected"
+  | "BlueprintLoaded";
+
 function App() {
-  const network = NetworkType.TESTNET;
-  const [state, setState] = createSignal("Startup");
-  const [wallets, setWallets] = createSignal<WalletDescriptor[]>([]);
+  const network: "testnet" | "mainnet" = "testnet";
+  const [state, setState] = createSignal<State>("Startup");
+  const [wallets, setWallets] = createSignal<Cip30Wallet[]>([]);
   const [loadedWallet, setLoadedWallet] = createSignal<LoadedWallet | null>(
     null,
   );
   const [scripts, setScripts] = createSignal<Script[]>([]);
   const [errors, setErrors] = createSignal("");
 
-  Wallet.addEventListener("stakeAddress", (value) => {
-    const stakeAddress = typeof value === "string" ? value : null;
-    console.log("Stake address event:", stakeAddress);
-    // update loadedWallet if it is defined
-    console.log("loadedWallet:", loadedWallet());
-    if (loadedWallet()) {
-      setLoadedWallet({
-        ...loadedWallet()!,
-        stakeAddress: stakeAddress,
-      });
-    }
-  });
-
-  (async function discoverWallets() {
-    try {
-      // Discover installed wallets
-      const discoveredWallets = Wallet.getInstalledWalletExtensions();
-      // Retrieve the name and icon for each wallet
-      setWallets(
-        discoveredWallets.map((walletId) => ({
-          id: walletId,
-          name: walletId, // TODO: no way to get the human-friendly name?
-          // icon: Wallet.?, // TODO: no api to get the wallet icon?
-        })),
-      );
-      setState("WalletsDiscovered");
-    } catch (error: unknown) {
-      setErrors(error instanceof Error ? error.message : String(error));
-      setState("Startup");
-    }
-  })();
-
-  function walletConnected() {
-    setState("WalletConnected");
-    // Load the wallet UTxOs how to?
-  }
+  setWallets(cip30Discover());
+  setState("WalletsDiscovered");
 
   type Script = {
     name: string;
@@ -85,7 +47,6 @@ function App() {
       }
     };
 
-    // In a real app, this would be fetch calls to the JSON files
     Promise.all([
       fetch("lock-plutus.json").then((r) => r.json()),
       fetch("badges-plutus.json").then((r) => r.json()),
@@ -109,7 +70,7 @@ function App() {
 
   // Display components ########################################################
 
-  function displayErrors() {
+  function viewErrors() {
     if (!errors()) return null;
 
     return (
@@ -120,13 +81,13 @@ function App() {
     );
   }
 
-  function viewLoadedWallet(wallet: LoadedWallet | null) {
+  function viewLoadedWallet(wallet: LoadedWallet) {
     return (
       <>
-        <div>Wallet: {wallet?.name}</div>
-        <div>Stake Address: {wallet?.stakeAddress}</div>
+        <img src={wallet.icon} height={32} alt="wallet icon" />
+        <div>Wallet: {wallet.name}</div>
         {/* <div>Address: {Bytes.toHex(Address.toBytes(wallet.changeAddress))}</div> */}
-        <div>UTxO count: {Object.keys(wallet?.utxos ?? {}).length}</div>
+        <div>UTxO count: {Object.keys(wallet.utxos ?? {}).length}</div>
       </>
     );
   }
@@ -134,23 +95,20 @@ function App() {
   function viewAvailableWallets() {
     return (
       <div>
-        {wallets().map((wallet) => (
+        {wallets().map((wallet: Cip30Wallet) => (
           <div>
-            {/* <img src={wallet.icon} height={32} alt="wallet icon" /> */}
-            {`id: ${wallet.id}, name: ${wallet.name}`}
+            <img src={wallet.icon} height={32} alt="wallet icon" />
+            {`name: ${wallet.name}`}
             <button
-              onClick={() => {
+              onClick={async () => {
+                const api = await wallet.enable();
+                const utxos = await api.getUtxos();
                 setLoadedWallet({
                   ...wallet,
-                  stakeAddress: null,
-                  utxos: {},
+                  api,
+                  utxos,
                 });
-                Wallet.connect(
-                  wallet.id,
-                  network,
-                  () => walletConnected(), // onConnect
-                  (code) => console.error(code), // onError
-                );
+                setState("WalletConnected");
               }}
             >
               connect
@@ -174,13 +132,13 @@ function App() {
       </Show>
 
       <Show when={state() === "WalletConnected"}>
-        {viewLoadedWallet(loadedWallet())}
+        {viewLoadedWallet(loadedWallet()!)}
         <button onClick={loadBlueprint}>Load Blueprints</button>
-        {displayErrors()}
+        {viewErrors()}
       </Show>
 
       <Show when={state() === "BlueprintLoaded"}>
-        {viewLoadedWallet(loadedWallet())}
+        {viewLoadedWallet(loadedWallet()!)}
         {scripts().map((script) => (
           <div>
             {script.hasParams
@@ -191,7 +149,7 @@ function App() {
         {/* <button onClick={pickUtxoParam}>
           Auto-pick UTxO to be spent for unicity guarantee of the mint contract
         </button> */}
-        {displayErrors()}
+        {viewErrors()}
       </Show>
     </div>
   );

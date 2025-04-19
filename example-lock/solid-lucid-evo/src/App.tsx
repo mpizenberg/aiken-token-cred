@@ -31,7 +31,9 @@ type State =
   | "WalletConnected"
   | "BlueprintLoaded"
   | "ParametersSet"
-  | "TokenMintingDone";
+  | "BadgeMintingDone"
+  | "UnlockingDone"
+  | "BadgeBurningDone";
 
 type AppContext = {
   loadedWallet: LoadedWallet;
@@ -247,9 +249,34 @@ function App() {
       const mintTxId = await signedTx.submit();
       setTxId(mintTxId);
 
-      setState("TokenMintingDone");
+      setState("UnlockingDone");
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while minting the badge");
+    }
+  }
+
+  async function burnBadge() {
+    try {
+      const ctx = appContext()!;
+      const policyId = ctx.uniqueMint.policyId;
+      const tx = await lucid!
+        .newTx()
+        .mintAssets(
+          {
+            [policyId + fromText("")]: -1n,
+          },
+          Data.to([]),
+        )
+        .attach.Script(ctx.uniqueMint.validator)
+        .complete();
+
+      const signedTx = await tx.sign.withWallet().complete();
+      const burnTxId = await signedTx.submit();
+      setTxId(burnTxId);
+
+      setState("BadgeBurningDone");
+    } catch (err) {
+      setErrors(err?.toString() || "Unknown error while burning the badge");
     }
   }
 
@@ -356,11 +383,26 @@ function App() {
         {viewErrors()}
       </Show>
 
-      <Show when={state() === "TokenMintingDone"}>
+      <Show when={state() === "BadgeMintingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token minting done</div>
         <div>Transaction ID: {txId()}</div>
         {/* <button onClick={lockAssets}>Lock 2 Ada with the token as key</button> */}
+        {viewErrors()}
+      </Show>
+
+      <Show when={state() === "UnlockingDone"}>
+        {viewLoadedWallet(appContext()!.loadedWallet)}
+        <div>Assets unlocked!</div>
+        <div>Transaction ID: {txId()}</div>
+        <button onClick={burnBadge}>Burn the token key</button>
+        {viewErrors()}
+      </Show>
+
+      <Show when={state() === "BadgeBurningDone"}>
+        {viewLoadedWallet(appContext()!.loadedWallet)}
+        <div>Token burning done</div>
+        <div>Transaction ID: {txId()}</div>
         {viewErrors()}
       </Show>
     </div>

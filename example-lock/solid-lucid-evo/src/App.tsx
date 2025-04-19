@@ -11,6 +11,7 @@ import {
   Lucid,
   LucidEvolution,
   mintingPolicyToId,
+  OutRef,
   RewardAddress,
   UTxO,
   Validator,
@@ -32,6 +33,7 @@ type State =
   | "BlueprintLoaded"
   | "ParametersSet"
   | "BadgeMintingDone"
+  | "LockingDone"
   | "UnlockingDone"
   | "BadgeBurningDone";
 
@@ -249,9 +251,98 @@ function App() {
       const mintTxId = await signedTx.submit();
       setTxId(mintTxId);
 
-      setState("UnlockingDone");
+      setState("BadgeMintingDone");
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while minting the badge");
+    }
+  }
+
+  async function lockAssets() {
+    try {
+      const ctx = appContext()!;
+      const policyId = ctx.uniqueMint.policyId;
+      const tx = await lucid!
+        .newTx()
+        .pay.ToContract(
+          ctx.lockScript.address,
+          {
+            kind: "inline",
+            value: Data.to(policyId),
+          },
+          { lovelace: 2000000n },
+        )
+        .complete();
+      const signedTx = await tx.sign.withWallet().complete();
+      const mintTxId = await signedTx.submit();
+      setTxId(mintTxId);
+
+      setState("LockingDone");
+    } catch (err) {
+      setErrors(err?.toString() || "Unknown error while locking the assets");
+    }
+  }
+
+  async function unlockAssets() {
+    try {
+      const ctx = appContext()!;
+      // The locked UTxO was the first output of the locking transaction
+      console.log("hello 1");
+      const lockedUtxoRef: OutRef = { txHash: txId()!, outputIndex: 0 };
+      const lockedUtxo = (await lucid!.utxosByOutRef([lockedUtxoRef]))[0];
+      console.log("hello 2");
+
+      // The unlock redeemer must contain the index of the badges withdraw redeemer
+      // in the list of redeemer in the script context (for fast access).
+      // This Tx will contain 2 redeemers:
+      //  - one for the unlock script (spend purpose)
+      //  - one for the badges verification script (withdraw purpose)
+      // So since spend purposes are ordered first before withdrawals,
+      // We know that the index of the badges verification withdraw redeemer will be 1 (0 is the unlock spend).
+      // TODO: find that index reliably instead of hardcoded
+      const unlockRedeemer = Data.to(1n);
+
+      // For the badges verification withdraw script,
+      // we must provide in the redeemer the list of presented badges,
+      // as well as their index in the list of inputs or reference inputs.
+      // TODO: find reliably the index of the ref input with the badge.
+      const badgesRedeemer = Data.to(
+        new Map([
+          [
+            ctx.uniqueMint.policyId,
+            new Constr(
+              0, // 0 for ref inputs, 1 for spent inputs
+              [0n], // index of UTxO containing the badge in ref inputs. Hardcoded to 0 here since it’s the only ref input.
+            ),
+          ],
+        ]),
+      );
+
+      // Retrieve the UTxO containing the badge used to unlock the funds
+      console.log("hello 3");
+      const badgeUtxo = await lucid!.utxoByUnit(
+        ctx.uniqueMint.policyId + fromText(""),
+      );
+      console.log("hello 4");
+
+      const tx = await lucid!
+        .newTx()
+        // collect the locked UTxO
+        .collectFrom([lockedUtxo], unlockRedeemer)
+        .attach.Script(ctx.lockScript.validator)
+        // provide the badge proof to the verification withdraw script
+        .readFrom([badgeUtxo])
+        // call the badges verification withdraw script (with 0 ada withdrawal)
+        .withdraw(ctx.badgesScript.rewardAddress, 0n, badgesRedeemer)
+        .attach.Script(ctx.badgesScript.validator)
+        .complete();
+
+      const signedTx = await tx.sign.withWallet().complete();
+      const unlockTxId = await signedTx.submit();
+      setTxId(unlockTxId);
+
+      setState("UnlockingDone");
+    } catch (err) {
+      setErrors(err?.toString() || "Unknown error while unlocking the funds");
     }
   }
 
@@ -387,7 +478,17 @@ function App() {
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token minting done</div>
         <div>Transaction ID: {txId()}</div>
-        {/* <button onClick={lockAssets}>Lock 2 Ada with the token as key</button> */}
+        <button onClick={lockAssets}>Lock 2 Ada with the badge as key</button>
+        {viewErrors()}
+      </Show>
+
+      <Show when={state() === "LockingDone"}>
+        {viewLoadedWallet(appContext()!.loadedWallet)}
+        <div>Assets locking done</div>
+        <div>Transaction ID: {txId()}</div>
+        <button onClick={unlockAssets}>
+          Unlock the assets with the badge as key
+        </button>
         {viewErrors()}
       </Show>
 
@@ -395,7 +496,7 @@ function App() {
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets unlocked!</div>
         <div>Transaction ID: {txId()}</div>
-        <button onClick={burnBadge}>Burn the token key</button>
+        <button onClick={burnBadge}>Burn the badge</button>
         {viewErrors()}
       </Show>
 

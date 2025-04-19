@@ -1,6 +1,6 @@
 # Lucid Evolution Frontend
 
-This project showcases usage of [Lucid Evolution][luci-evo] offchain code to use badges for the lock script.
+This project showcases usage of [Lucid Evolution][lucid-evo] offchain code to use badges for the lock script.
 Any public key or script holding the token can unlock the funds.
 
 This example proceeds with these steps:

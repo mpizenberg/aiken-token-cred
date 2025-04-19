@@ -5,14 +5,18 @@ import {
   applyDoubleCborEncoding,
   applyParamsToScript,
   Constr,
+  Data,
+  fromText,
   Koios,
   Lucid,
   LucidEvolution,
+  mintingPolicyToId,
   RewardAddress,
   UTxO,
   Validator,
   validatorToAddress,
   validatorToRewardAddress,
+  validatorToScriptHash,
   WalletApi,
 } from "@lucid-evolution/lucid";
 
@@ -26,7 +30,8 @@ type State =
   | "WalletsDiscovered"
   | "WalletConnected"
   | "BlueprintLoaded"
-  | "ParametersSet";
+  | "ParametersSet"
+  | "TokenMintingDone";
 
 type AppContext = {
   loadedWallet: LoadedWallet;
@@ -58,6 +63,7 @@ function App() {
   );
   const [scripts, setScripts] = createSignal<Script[]>([]);
   const [appContext, setAppContext] = createSignal<AppContext | null>(null);
+  const [txId, setTxId] = createSignal<string | null>(null);
   const [errors, setErrors] = createSignal("");
 
   // Initialize Lucid Evolution library with some API provider
@@ -122,7 +128,6 @@ function App() {
   async function pickUtxoParam() {
     const wallet = loadedWallet()!;
     const walletUtxos = wallet.utxos ?? [];
-    console.log("utxos", walletUtxos);
 
     if (walletUtxos.length === 0) {
       setErrors("Selected wallet has no UTxO.");
@@ -141,9 +146,7 @@ function App() {
 
       const appliedMint = applyParamsToScript(mintBlueprint.scriptBytes, [
         // Convert headUtxo reference into Data
-        new Constr(0, [
-          new Constr(0, [headUtxo.txHash, BigInt(headUtxo.outputIndex)]),
-        ]),
+        new Constr(0, [headUtxo.txHash, BigInt(headUtxo.outputIndex)]),
       ]);
       const mintScript: Validator = {
         type: "PlutusV3",
@@ -191,12 +194,12 @@ function App() {
           pickedUtxo: headUtxo,
           pickedUtxoRef: headUtxo.txHash + "#" + headUtxo.outputIndex,
           validator: mintScript,
-          policyId: mintBlueprint.hash,
+          policyId: mintingPolicyToId(mintScript),
         },
         lockScript: {
           address: validatorToAddress(network, lockScript),
           validator: lockScript,
-          hash: lockBlueprint.hash,
+          hash: validatorToScriptHash(lockScript),
         },
       });
 
@@ -221,6 +224,32 @@ function App() {
       await signedTx.submit();
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while registering script");
+    }
+  }
+
+  async function mintBadge() {
+    try {
+      const ctx = appContext()!;
+      const policyId = ctx.uniqueMint.policyId;
+      const tx = await lucid!
+        .newTx()
+        .collectFrom([ctx.uniqueMint.pickedUtxo]) // required UTxO to be spent (for unicity)
+        .mintAssets(
+          {
+            [policyId + fromText("")]: 1n,
+          },
+          Data.to([]),
+        )
+        .attach.Script(ctx.uniqueMint.validator)
+        .complete();
+
+      const signedTx = await tx.sign.withWallet().complete();
+      const mintTxId = await signedTx.submit();
+      setTxId(mintTxId);
+
+      setState("TokenMintingDone");
+    } catch (err) {
+      setErrors(err?.toString() || "Unknown error while minting the badge");
     }
   }
 
@@ -309,7 +338,7 @@ function App() {
         {viewErrors()}
       </Show>
 
-      <Show when={state() === "ParametersSet" && appContext() != null}>
+      <Show when={state() === "ParametersSet"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>☑️ Picked UTxO: {appContext()!.uniqueMint.pickedUtxoRef}</div>
         <div>
@@ -319,11 +348,19 @@ function App() {
         <div>Lock script hash: {appContext()!.lockScript.hash}</div>
         <div>Badges script hash: {appContext()!.badgesScript.hash}</div>
 
-        {/* <button onClick={mintTokenKey}>Mint the token key</button> */}
+        <button onClick={mintBadge}>Mint the badge</button>
         <button onClick={registerScript}>
-          Register the token cred script (do only if needed)
+          Register the badges script (do only if needed)
         </button>
 
+        {viewErrors()}
+      </Show>
+
+      <Show when={state() === "TokenMintingDone"}>
+        {viewLoadedWallet(appContext()!.loadedWallet)}
+        <div>Token minting done</div>
+        <div>Transaction ID: {txId()}</div>
+        {/* <button onClick={lockAssets}>Lock 2 Ada with the token as key</button> */}
         {viewErrors()}
       </Show>
     </div>

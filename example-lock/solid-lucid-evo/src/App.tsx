@@ -11,7 +11,7 @@ import {
   Lucid,
   LucidEvolution,
   mintingPolicyToId,
-  OutRef,
+  paymentCredentialOf,
   RewardAddress,
   UTxO,
   Validator,
@@ -58,6 +58,12 @@ type AppContext = {
   };
 };
 
+type LatestTx = {
+  txId: string;
+  txOutputs: UTxO[];
+  newWalletUtxos: UTxO[];
+};
+
 function App() {
   const network: "Preview" | "Mainnet" = "Preview";
   const [state, setState] = createSignal<State>("Startup");
@@ -67,7 +73,8 @@ function App() {
   );
   const [scripts, setScripts] = createSignal<Script[]>([]);
   const [appContext, setAppContext] = createSignal<AppContext | null>(null);
-  const [txId, setTxId] = createSignal<string | null>(null);
+  const [badgeUtxo, setBadgeUtxo] = createSignal<UTxO | null>(null);
+  const [latestTx, setLatestTx] = createSignal<LatestTx | null>(null);
   const [errors, setErrors] = createSignal("");
 
   // Initialize Lucid Evolution library with some API provider
@@ -235,7 +242,7 @@ function App() {
     try {
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const tx = await lucid!
+      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
         .newTx()
         .collectFrom([ctx.uniqueMint.pickedUtxo]) // required UTxO to be spent (for unicity)
         .mintAssets(
@@ -245,11 +252,12 @@ function App() {
           Data.to([]),
         )
         .attach.Script(ctx.uniqueMint.validator)
-        .complete();
+        .chain();
 
-      const signedTx = await tx.sign.withWallet().complete();
-      const mintTxId = await signedTx.submit();
-      setTxId(mintTxId);
+      const signedTx = await txSignBuilder.sign.withWallet().complete();
+      const txId = await signedTx.submit();
+      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      setBadgeUtxo(txOutputs[0]);
 
       setState("BadgeMintingDone");
     } catch (err) {
@@ -259,9 +267,12 @@ function App() {
 
   async function lockAssets() {
     try {
+      // Update wallet UTxOs with the latest Tx
+      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
+
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const tx = await lucid!
+      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
         .newTx()
         .pay.ToContract(
           ctx.lockScript.address,
@@ -271,10 +282,10 @@ function App() {
           },
           { lovelace: 2000000n },
         )
-        .complete();
-      const signedTx = await tx.sign.withWallet().complete();
-      const mintTxId = await signedTx.submit();
-      setTxId(mintTxId);
+        .chain();
+      const signedTx = await txSignBuilder.sign.withWallet().complete();
+      const txId = await signedTx.submit();
+      setLatestTx({ txId, newWalletUtxos, txOutputs });
 
       setState("LockingDone");
     } catch (err) {
@@ -284,12 +295,12 @@ function App() {
 
   async function unlockAssets() {
     try {
+      // Update wallet UTxOs with the latest Tx
+      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
+
       const ctx = appContext()!;
       // The locked UTxO was the first output of the locking transaction
-      console.log("hello 1");
-      const lockedUtxoRef: OutRef = { txHash: txId()!, outputIndex: 0 };
-      const lockedUtxo = (await lucid!.utxosByOutRef([lockedUtxoRef]))[0];
-      console.log("hello 2");
+      const lockedUtxo = latestTx()!.txOutputs[0];
 
       // The unlock redeemer must contain the index of the badges withdraw redeemer
       // in the list of redeemer in the script context (for fast access).
@@ -317,28 +328,27 @@ function App() {
         ]),
       );
 
-      // Retrieve the UTxO containing the badge used to unlock the funds
-      console.log("hello 3");
-      const badgeUtxo = await lucid!.utxoByUnit(
-        ctx.uniqueMint.policyId + fromText(""),
-      );
-      console.log("hello 4");
+      // Extract the payment credential from the wallet address
+      const walletAddress = await lucid!.wallet().address();
+      const walletKeyHash = paymentCredentialOf(walletAddress).hash;
 
-      const tx = await lucid!
+      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
         .newTx()
         // collect the locked UTxO
         .collectFrom([lockedUtxo], unlockRedeemer)
         .attach.Script(ctx.lockScript.validator)
-        // provide the badge proof to the verification withdraw script
-        .readFrom([badgeUtxo])
+        // Provide the badge proof to the verification withdraw script.
+        // This also needs the wallet signature since it’s provided by reference.
+        .readFrom([badgeUtxo()!])
+        .addSignerKey(walletKeyHash)
         // call the badges verification withdraw script (with 0 ada withdrawal)
         .withdraw(ctx.badgesScript.rewardAddress, 0n, badgesRedeemer)
         .attach.Script(ctx.badgesScript.validator)
-        .complete();
+        .chain();
 
-      const signedTx = await tx.sign.withWallet().complete();
-      const unlockTxId = await signedTx.submit();
-      setTxId(unlockTxId);
+      const signedTx = await txSignBuilder.sign.withWallet().complete();
+      const txId = await signedTx.submit();
+      setLatestTx({ txId, newWalletUtxos, txOutputs });
 
       setState("UnlockingDone");
     } catch (err) {
@@ -348,9 +358,12 @@ function App() {
 
   async function burnBadge() {
     try {
+      // Update wallet UTxOs with the latest Tx
+      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
+
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const tx = await lucid!
+      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
         .newTx()
         .mintAssets(
           {
@@ -359,11 +372,11 @@ function App() {
           Data.to([]),
         )
         .attach.Script(ctx.uniqueMint.validator)
-        .complete();
+        .chain();
 
-      const signedTx = await tx.sign.withWallet().complete();
-      const burnTxId = await signedTx.submit();
-      setTxId(burnTxId);
+      const signedTx = await txSignBuilder.sign.withWallet().complete();
+      const txId = await signedTx.submit();
+      setLatestTx({ txId, newWalletUtxos, txOutputs });
 
       setState("BadgeBurningDone");
     } catch (err) {
@@ -477,7 +490,7 @@ function App() {
       <Show when={state() === "BadgeMintingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token minting done</div>
-        <div>Transaction ID: {txId()}</div>
+        <div>Transaction ID: {latestTx()!.txId}</div>
         <button onClick={lockAssets}>Lock 2 Ada with the badge as key</button>
         {viewErrors()}
       </Show>
@@ -485,7 +498,7 @@ function App() {
       <Show when={state() === "LockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets locking done</div>
-        <div>Transaction ID: {txId()}</div>
+        <div>Transaction ID: {latestTx()!.txId}</div>
         <button onClick={unlockAssets}>
           Unlock the assets with the badge as key
         </button>
@@ -495,7 +508,7 @@ function App() {
       <Show when={state() === "UnlockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets unlocked!</div>
-        <div>Transaction ID: {txId()}</div>
+        <div>Transaction ID: {latestTx()!.txId}</div>
         <button onClick={burnBadge}>Burn the badge</button>
         {viewErrors()}
       </Show>
@@ -503,7 +516,7 @@ function App() {
       <Show when={state() === "BadgeBurningDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token burning done</div>
-        <div>Transaction ID: {txId()}</div>
+        <div>Transaction ID: {latestTx()!.txId}</div>
         {viewErrors()}
       </Show>
     </div>

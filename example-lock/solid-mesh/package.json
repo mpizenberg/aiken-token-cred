@@ -1,5 +1,5 @@
 {
-  "name": "my-vue-app",
+  "name": "solid-mesh",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@lucid-evolution/lucid": "^0.4.27",
+    "@meshsdk/configs": "link:@meshsdk/configs",
+    "@meshsdk/transaction": "link:@meshsdk/transaction",
+    "@meshsdk/core": "link:@meshsdk/core",
+    "@meshsdk/core-csl": "^1.9.0-beta.37",
+    "@meshsdk/core-cst": "^1.9.0-beta.37",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

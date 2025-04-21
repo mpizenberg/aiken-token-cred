@@ -1,29 +1,26 @@
 import { createSignal, Show } from "solid-js";
-import { cip30Discover, Cip30Wallet } from "./Wallet.ts";
 import {
-  Address,
-  applyDoubleCborEncoding,
   applyParamsToScript,
-  Constr,
-  Data,
-  fromText,
-  Koios,
-  Lucid,
-  LucidEvolution,
-  mintingPolicyToId,
-  paymentCredentialOf,
-  RewardAddress,
+  BrowserWallet,
+  mConStr,
+  PlutusScript,
+  serializePlutusScript,
+  Wallet,
   UTxO,
-  Validator,
-  validatorToAddress,
-  validatorToRewardAddress,
-  validatorToScriptHash,
-  WalletApi,
-} from "@lucid-evolution/lucid";
+  resolveScriptHash,
+  deserializeAddress,
+  MeshTxBuilder,
+  ISubmitter,
+  serializeRewardAddress,
+  BlockfrostProvider,
+} from "@meshsdk/core";
+import { OfflineEvaluator } from "@meshsdk/core-csl";
 
-type LoadedWallet = Cip30Wallet & {
-  api: WalletApi;
-  utxos: UTxO[] | undefined;
+type LoadedWallet = Wallet & {
+  api: BrowserWallet;
+  walletAddress: string;
+  utxos: UTxO[];
+  collateral: UTxO;
 };
 
 type State =
@@ -42,56 +39,68 @@ type AppContext = {
   localStateUtxos: UTxO[];
   badgesScript: {
     hash: string;
-    validator: Validator;
-    rewardAddress: RewardAddress;
+    validator: PlutusScript;
+    rewardAddress: string;
   };
   uniqueMint: {
     pickedUtxo: UTxO;
     pickedUtxoRef: string;
-    validator: Validator;
+    validator: PlutusScript;
     policyId: string;
   };
   lockScript: {
-    address: Address;
-    validator: Validator;
+    address: string;
+    validator: PlutusScript;
     hash: string;
   };
 };
 
-type LatestTx = {
-  txId: string;
-  txOutputs: UTxO[];
-  newWalletUtxos: UTxO[];
+type UtxoRef = {
+  txHash: string;
+  outputIndex: number;
 };
 
 function App() {
-  const network: "Preview" | "Mainnet" = "Preview";
+  const networkId: 0 | 1 = 0; // 0 Testnet, 1 Mainnet
   const [state, setState] = createSignal<State>("Startup");
-  const [wallets, setWallets] = createSignal<Cip30Wallet[]>([]);
+  const [wallets, setWallets] = createSignal<Wallet[]>([]);
   const [loadedWallet, setLoadedWallet] = createSignal<LoadedWallet | null>(
     null,
   );
   const [scripts, setScripts] = createSignal<Script[]>([]);
   const [appContext, setAppContext] = createSignal<AppContext | null>(null);
-  const [badgeUtxo, setBadgeUtxo] = createSignal<UTxO | null>(null);
-  const [latestTx, setLatestTx] = createSignal<LatestTx | null>(null);
+  const [badgeUtxoRef, setBadgeUtxoRef] = createSignal<UtxoRef | null>(null);
+  const [latestTxId, setLatestTxId] = createSignal<string | null>(null);
   const [errors, setErrors] = createSignal("");
 
-  // Initialize Lucid Evolution library with some API provider
-  let lucid: LucidEvolution | null = null;
-  (async () => {
-    lucid = await Lucid(
-      new Koios(
-        "https://preview.koios.rest/api/v1",
-        import.meta.env.VITE_KOIOS_API_KEY,
-      ),
-      "Preview",
-    );
-  })();
+  // Initialize API provider (Kois doesn’t work with offline evaluator)
+  // const koiosProvider = new KoiosProvider(
+  //   "preview",
+  //   import.meta.env.VITE_KOIOS_API_KEY,
+  // );
+  const blockfrostProvider = new BlockfrostProvider(
+    import.meta.env.VITE_BLOCKFROST_PROJECT_ID,
+  );
+  const provider = blockfrostProvider;
+
+  // Function to re-initialize the Tx builder each time.
+  // Otherwise, it keeps in memory the previous intents.
+  let txBuilderSubmitter: ISubmitter = provider;
+  const txBuilder = () =>
+    new MeshTxBuilder({
+      evaluator: new OfflineEvaluator(provider, "preview"), // customize redeemer exec unit evaluation
+      params: undefined, // customize protocol params
+      fetcher: provider, // customize missing data fetcher
+      submitter: txBuilderSubmitter, // customize Tx submission, later changed by the wallet
+      serializer: undefined, // customize CBOR serializer
+      verbose: true,
+    });
 
   // Discover installed CIP-30 wallets
-  setWallets(cip30Discover());
-  setState("WalletsDiscovered");
+  (async () => {
+    setWallets(await BrowserWallet.getAvailableWallets());
+    setState("WalletsDiscovered");
+  })();
 
   type Script = {
     name: string;
@@ -157,11 +166,11 @@ function App() {
 
       const appliedMint = applyParamsToScript(mintBlueprint.scriptBytes, [
         // Convert headUtxo reference into Data
-        new Constr(0, [headUtxo.txHash, BigInt(headUtxo.outputIndex)]),
+        mConStr(0, [headUtxo.input.txHash, BigInt(headUtxo.input.outputIndex)]),
       ]);
-      const mintScript: Validator = {
-        type: "PlutusV3",
-        script: appliedMint,
+      const mintScript: PlutusScript = {
+        version: "V3",
+        code: appliedMint,
       };
 
       // Find badges script in blueprint
@@ -172,13 +181,14 @@ function App() {
         throw new Error("Badges script not found in blueprint");
 
       const badgesScriptHash = badgesBlueprint.hash;
-      const badgesScript: Validator = {
-        type: "PlutusV3",
-        script: applyDoubleCborEncoding(badgesBlueprint.scriptBytes),
+      const badgesScript: PlutusScript = {
+        version: "V3",
+        code: applyParamsToScript(badgesBlueprint.scriptBytes, []),
       };
-      const badgesScriptRewardAddress: RewardAddress = validatorToRewardAddress(
-        network,
-        badgesScript,
+      const badgesScriptRewardAddress: string = serializeRewardAddress(
+        badgesScriptHash,
+        true,
+        networkId,
       );
 
       // Find lock script in blueprint
@@ -188,10 +198,15 @@ function App() {
       const appliedLock = applyParamsToScript(lockBlueprint.scriptBytes, [
         badgesScriptHash,
       ]);
-      const lockScript: Validator = {
-        type: "PlutusV3",
-        script: appliedLock,
+      const lockScript: PlutusScript = {
+        version: "V3",
+        code: appliedLock,
       };
+      const lockScriptAddress: string = serializePlutusScript(
+        lockScript,
+        undefined,
+        networkId,
+      ).address;
 
       setAppContext({
         loadedWallet: wallet,
@@ -203,14 +218,15 @@ function App() {
         },
         uniqueMint: {
           pickedUtxo: headUtxo,
-          pickedUtxoRef: headUtxo.txHash + "#" + headUtxo.outputIndex,
+          pickedUtxoRef:
+            headUtxo.input.txHash + "#" + headUtxo.input.outputIndex,
           validator: mintScript,
-          policyId: mintingPolicyToId(mintScript),
+          policyId: resolveScriptHash(mintScript.code, mintScript.version),
         },
         lockScript: {
-          address: validatorToAddress(network, lockScript),
+          address: lockScriptAddress,
           validator: lockScript,
-          hash: validatorToScriptHash(lockScript),
+          hash: resolveScriptHash(lockScript.code, lockScript.version),
         },
       });
 
@@ -226,13 +242,33 @@ function App() {
   async function registerScript() {
     try {
       const ctx = appContext()!;
-      const tx = await lucid!
-        .newTx()
-        .register.Stake(ctx.badgesScript.rewardAddress)
-        .attach.Script(ctx.badgesScript.validator)
+      const wallet = loadedWallet()!;
+      const walletAddress = wallet.walletAddress;
+      const collateral = wallet.collateral;
+      const utxos = await wallet.api.getUtxos();
+      setLoadedWallet({ ...wallet, utxos });
+
+      const tx = await txBuilder()
+        .registerStakeCertificate(ctx.badgesScript.rewardAddress)
+        .certificateScript(
+          ctx.badgesScript.validator.code,
+          ctx.badgesScript.validator.version,
+        )
+        // send change back to wallet
+        .changeAddress(walletAddress)
+        // Provide the list of UTxOs to use for selection
+        .selectUtxosFrom(utxos)
+        // set collateral
+        // Remark: this could fail if the wallet has no UTxO "declared" for collateral
+        .txInCollateral(
+          collateral.input.txHash,
+          collateral.input.outputIndex,
+          collateral.output.amount,
+          collateral.output.address,
+        )
         .complete();
-      const signedTx = await tx.sign.withWallet().complete();
-      await signedTx.submit();
+      const signedTx = await wallet.api.signTx(tx);
+      await wallet.api.submitTx(signedTx);
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while registering script");
     }
@@ -242,22 +278,47 @@ function App() {
     try {
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .collectFrom([ctx.uniqueMint.pickedUtxo]) // required UTxO to be spent (for unicity)
-        .mintAssets(
-          {
-            [policyId + fromText("")]: 1n,
-          },
-          Data.to([]),
-        )
-        .attach.Script(ctx.uniqueMint.validator)
-        .chain();
+      const pickedUtxo = ctx.uniqueMint.pickedUtxo;
+      const wallet = loadedWallet()!;
+      const walletAddress = wallet.walletAddress;
+      const collateral = wallet.collateral;
+      const utxos = await wallet.api.getUtxos();
+      setLoadedWallet({ ...wallet, utxos });
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
-      setBadgeUtxo(txOutputs[0]);
+      const tx = await txBuilder()
+        // required UTxO to be spent (for unicity)
+        .txIn(
+          pickedUtxo.input.txHash,
+          pickedUtxo.input.outputIndex,
+          pickedUtxo.output.amount, // optional, but can avoid api provider requests
+          pickedUtxo.output.address, // optional, but can avoid api provider requests
+          0, // script size: optional, but can avoid api provider requests
+        )
+        // Badge being minted
+        .mintPlutusScript(ctx.uniqueMint.validator.version)
+        .mint("1", policyId, "")
+        .mintingScript(ctx.uniqueMint.validator.code)
+        .mintRedeemerValue([])
+        // send change back to wallet
+        .changeAddress(walletAddress)
+        // Provide the list of UTxOs to use for selection
+        .selectUtxosFrom(utxos) // TODO: should I remove pickedUtxo from that?
+        // set collateral
+        // Remark: this could fail if the wallet has no UTxO "declared" for collateral
+        .txInCollateral(
+          collateral.input.txHash,
+          collateral.input.outputIndex,
+          collateral.output.amount,
+          collateral.output.address,
+        )
+        .complete();
+
+      const signedTx = await wallet.api.signTx(tx);
+      const txId = await wallet.api.submitTx(signedTx);
+      setLatestTxId(txId);
+
+      // TODO: actually make sure the output index is correct instead of hardcoding it to 0
+      setBadgeUtxoRef({ txHash: txId, outputIndex: 0 });
 
       setState("BadgeMintingDone");
     } catch (err) {
@@ -267,25 +328,39 @@ function App() {
 
   async function lockAssets() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
       const ctx = appContext()!;
+      const lockAddress = ctx.lockScript.address;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .pay.ToContract(
-          ctx.lockScript.address,
-          {
-            kind: "inline",
-            value: Data.to(policyId),
-          },
-          { lovelace: 2000000n },
+      const wallet = loadedWallet()!;
+      const walletAddress = wallet.walletAddress;
+      const collateral = wallet.collateral;
+      const utxos = await wallet.api.getUtxos();
+      setLoadedWallet({ ...wallet, utxos });
+
+      // Build the Tx
+      // Let the fetcher get the list of UTxOs for selection
+      const tx = await txBuilder()
+        // Send 2 ada to the lock address
+        .txOut(lockAddress, [{ unit: "", quantity: "2000000" }])
+        .txOutInlineDatumValue(policyId) // not working
+        // .txOutDatumEmbedValue(policyId) // not working
+        // send change back to wallet
+        .changeAddress(walletAddress)
+        // Provide the list of UTxOs to use for selection
+        .selectUtxosFrom(utxos)
+        // set collateral
+        // Remark: this could fail if the wallet has no UTxO "fit" for collateral
+        .txInCollateral(
+          collateral.input.txHash,
+          collateral.input.outputIndex,
+          collateral.output.amount,
+          collateral.output.address,
         )
-        .chain();
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+        .complete();
+
+      const signedTx = await wallet.api.signTx(tx);
+      const txId = await wallet.api.submitTx(signedTx);
+      setLatestTxId(txId);
 
       setState("LockingDone");
     } catch (err) {
@@ -295,12 +370,16 @@ function App() {
 
   async function unlockAssets() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
       const ctx = appContext()!;
+      const policyId = ctx.uniqueMint.policyId;
+      const wallet = loadedWallet()!;
+      const walletAddress = wallet.walletAddress;
+      const collateral = wallet.collateral;
+      const utxos = await wallet.api.getUtxos();
+      setLoadedWallet({ ...wallet, utxos });
+
       // The locked UTxO was the first output of the locking transaction
-      const lockedUtxo = latestTx()!.txOutputs[0];
+      const lockedUtxoRef = { txHash: latestTxId()!, outputIndex: 0 };
 
       // The unlock redeemer must contain the index of the badges withdraw redeemer
       // in the list of redeemer in the script context (for fast access).
@@ -310,45 +389,64 @@ function App() {
       // So since spend purposes are ordered first before withdrawals,
       // We know that the index of the badges verification withdraw redeemer will be 1 (0 is the unlock spend).
       // TODO: find that index reliably instead of hardcoded
-      const unlockRedeemer = Data.to(1n);
+      // const unlockRedeemer = 1n; // TypeError: Do not know how to serialize a BigInt
+      const unlockRedeemer = 1;
 
       // For the badges verification withdraw script,
       // we must provide in the redeemer the list of presented badges,
       // as well as their index in the list of inputs or reference inputs.
       // TODO: find reliably the index of the ref input with the badge.
-      const badgesRedeemer = Data.to(
-        new Map([
-          [
-            ctx.uniqueMint.policyId,
-            new Constr(
-              0, // 0 for ref inputs, 1 for spent inputs
-              [0n], // index of UTxO containing the badge in ref inputs. Hardcoded to 0 here since it’s the only ref input.
-            ),
-          ],
-        ]),
-      );
+      const badgesRedeemer = new Map([
+        [
+          ctx.uniqueMint.policyId,
+          mConStr(
+            0, // 0 for ref inputs, 1 for spent inputs
+            // [0n], // TypeError: Do not know how to serialize a BigInt
+            [0], // index of UTxO containing the badge in ref inputs. Hardcoded to 0 here since it’s the only ref input.
+          ),
+        ],
+      ]);
 
       // Extract the payment credential from the wallet address
-      const walletAddress = await lucid!.wallet().address();
-      const walletKeyHash = paymentCredentialOf(walletAddress).hash;
+      const walletKeyHash = deserializeAddress(walletAddress).pubKeyHash;
 
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
+      const tx = await txBuilder()
         // collect the locked UTxO
-        .collectFrom([lockedUtxo], unlockRedeemer)
-        .attach.Script(ctx.lockScript.validator)
+        .spendingPlutusScript(ctx.lockScript.validator.version)
+        .txIn(lockedUtxoRef.txHash, lockedUtxoRef.outputIndex)
+        .txInDatumValue(policyId)
+        .txInInlineDatumPresent()
+        .txInRedeemerValue(unlockRedeemer)
+        .txInScript(ctx.lockScript.validator.code)
         // Provide the badge proof to the verification withdraw script.
         // This also needs the wallet signature since it’s provided by reference.
-        .readFrom([badgeUtxo()!])
-        .addSignerKey(walletKeyHash)
+        .readOnlyTxInReference(
+          badgeUtxoRef()!.txHash,
+          badgeUtxoRef()!.outputIndex,
+        )
+        .requiredSignerHash(walletKeyHash)
         // call the badges verification withdraw script (with 0 ada withdrawal)
-        .withdraw(ctx.badgesScript.rewardAddress, 0n, badgesRedeemer)
-        .attach.Script(ctx.badgesScript.validator)
-        .chain();
+        .withdrawalPlutusScript(ctx.badgesScript.validator.version)
+        .withdrawal(ctx.badgesScript.rewardAddress, "0")
+        .withdrawalRedeemerValue(badgesRedeemer)
+        .withdrawalScript(ctx.badgesScript.validator.code)
+        // send change back to wallet
+        .changeAddress(walletAddress)
+        // Provide the list of UTxOs to use for selection
+        .selectUtxosFrom(utxos)
+        // set collateral
+        // Remark: this could fail if the wallet has no UTxO "fit" for collateral
+        .txInCollateral(
+          collateral.input.txHash,
+          collateral.input.outputIndex,
+          collateral.output.amount,
+          collateral.output.address,
+        )
+        .complete();
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      const signedTx = await wallet.api.signTx(tx, true); // partial sign needed by Eternl (wallet bug)
+      const txId = await wallet.api.submitTx(signedTx);
+      setLatestTxId(txId);
 
       setState("UnlockingDone");
     } catch (err) {
@@ -358,25 +456,38 @@ function App() {
 
   async function burnBadge() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .mintAssets(
-          {
-            [policyId + fromText("")]: -1n,
-          },
-          Data.to([]),
-        )
-        .attach.Script(ctx.uniqueMint.validator)
-        .chain();
+      const wallet = loadedWallet()!;
+      const walletAddress = wallet.walletAddress;
+      const collateral = wallet.collateral;
+      const utxos = await wallet.api.getUtxos();
+      setLoadedWallet({ ...wallet, utxos });
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      const tx = await txBuilder()
+        // TODO: Do we need to specify which UTxO to spend to find the badge?
+        // Badge being burned
+        .mintPlutusScript(ctx.uniqueMint.validator.version)
+        .mint("-1", policyId, "")
+        .mintingScript(ctx.uniqueMint.validator.code)
+        .mintRedeemerValue([])
+        // send change back to wallet
+        .changeAddress(walletAddress)
+        // Provide the list of UTxOs to use for selection
+        .selectUtxosFrom(utxos)
+        // set collateral
+        // Remark: this could fail if the wallet has no UTxO "fit" for collateral
+        .txInCollateral(
+          collateral.input.txHash,
+          collateral.input.outputIndex,
+          collateral.output.amount,
+          collateral.output.address,
+        )
+        .complete();
+
+      const signedTx = await wallet.api.signTx(tx);
+      const txId = await wallet.api.submitTx(signedTx);
+      setLatestTxId(txId);
 
       setState("BadgeBurningDone");
     } catch (err) {
@@ -411,19 +522,20 @@ function App() {
   function viewAvailableWallets() {
     return (
       <div>
-        {wallets().map((wallet: Cip30Wallet) => (
+        {wallets().map((wallet: Wallet) => (
           <div>
             <img src={wallet.icon} height={32} alt="wallet icon" />
             {`name: ${wallet.name}`}
             <button
               onClick={async () => {
-                const api = await wallet.enable();
-                lucid?.selectWallet.fromAPI(api);
-                const utxos = await lucid?.wallet().getUtxos();
+                const api = await BrowserWallet.enable(wallet.id);
+                txBuilderSubmitter = api; // Use wallet to submit Txs
                 setLoadedWallet({
                   ...wallet,
                   api,
-                  utxos,
+                  utxos: await api.getUtxos(),
+                  collateral: (await api.getCollateral())[0],
+                  walletAddress: await api.getChangeAddress(),
                 });
                 setState("WalletConnected");
               }}
@@ -490,7 +602,7 @@ function App() {
       <Show when={state() === "BadgeMintingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token minting done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTxId()!}</div>
         <button onClick={lockAssets}>Lock 2 Ada with the badge as key</button>
         {viewErrors()}
       </Show>
@@ -498,7 +610,7 @@ function App() {
       <Show when={state() === "LockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets locking done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTxId()!}</div>
         <button onClick={unlockAssets}>
           Unlock the assets with the badge as key
         </button>
@@ -508,7 +620,7 @@ function App() {
       <Show when={state() === "UnlockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets unlocked!</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTxId()!}</div>
         <button onClick={burnBadge}>Burn the badge</button>
         {viewErrors()}
       </Show>
@@ -516,7 +628,7 @@ function App() {
       <Show when={state() === "BadgeBurningDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token burning done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTxId()!}</div>
         {viewErrors()}
       </Show>
     </div>

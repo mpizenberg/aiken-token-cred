@@ -1,8 +1,10 @@
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Credential, Script, VerificationKey}
 use cardano/assets.{Lovelace, PolicyId}
 use cardano/certificate.{Certificate, RegisterCredential}
+use cardano/script_context.{ScriptContext}
 use cardano/transaction.{Input, Transaction}
 
 pub type Index {
@@ -10,11 +12,6 @@ pub type Index {
   SpentInputIndex(Int)
 }
 
-// Property tests:
-// - negative indexes always fail
-// - removing a redeemer from a successful check is still a successful check
-// - adding a non-existing policy ID makes it fail
-//
 // Benches:
 // - scaling of spent badges
 // - scaling of ref badges with public keys
@@ -26,21 +23,17 @@ validator check_badges {
   /// For each token policy ID, also provide the index of the UTxO
   /// in the (reference) inputs containing the token (for perf optimization).
   withdraw(redeemer: Pairs<PolicyId, Index>, _account: Data, tx: Transaction) {
-    let ref_inputs = tx.reference_inputs
-    let inputs = tx.inputs
-    let signatories = tx.extra_signatories
-    let withdrawals = tx.withdrawals
     let Pair(policy_id, index) <- list.all(redeemer)
     when index is {
       RefInputIndex(idx) -> {
         // Extract reference input at provided index
-        expect Some(input) = list.at(ref_inputs, idx)
+        expect Some(input) = list.at(tx.reference_inputs, idx)
         // Check the token
-        check(policy_id, input, signatories, withdrawals)
+        check(policy_id, input, tx.extra_signatories, tx.withdrawals)
       }
       SpentInputIndex(idx) -> {
         // Check presence of the token in the input at provided index
-        expect Some(Input { output, .. }) = list.at(inputs, idx)
+        expect Some(Input { output, .. }) = list.at(tx.inputs, idx)
         list.has(assets.policies(output.value), policy_id)
       }
     }
@@ -48,14 +41,14 @@ validator check_badges {
 
   /// Allow registration of the script, to enable withdrawals.
   /// TODO: enable lawful unregistrations.
-  publish(_redeemer: Data, certificate: Certificate, _tx: Data) {
+  publish(_redeemer: Data, certificate: Certificate, _tx: Transaction) {
     when certificate is {
       RegisterCredential { .. } -> True
       _ -> False
     }
   }
 
-  else(_ctx: Data) {
+  else(_ctx: ScriptContext) {
     False
   }
 }
@@ -80,9 +73,6 @@ fn check(
   // TODO: a perf improvement could provide the index of the cred we are looking for.
   when payment_cred is {
     VerificationKey(key_hash) -> list.has(signatories, key_hash)
-    Script(_) -> {
-      let Pair(cred, _) <- list.any(withdrawals)
-      cred == payment_cred
-    }
+    Script(_) -> pairs.has_key(withdrawals, payment_cred)
   }
 }

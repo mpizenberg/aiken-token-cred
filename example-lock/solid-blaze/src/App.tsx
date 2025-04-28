@@ -217,7 +217,6 @@ function App() {
           policyId: PolicyId(mintScript.hash()),
         },
         lockScript: {
-          // address: validatorToAddress(network, lockScript),
           address: new Address({
             type: AddressType.EnterpriseScript,
             networkId,
@@ -250,9 +249,8 @@ function App() {
         .provideScript(ctx.badgesScript.validator)
         .setChangeAddress(wallet.changeAddress)
         .complete();
-      const witnessSet = await wallet.api.signTransaction(tx, true);
-      tx.setWitnessSet(witnessSet);
-      await wallet.api.postTransaction(tx);
+      const signedTx = await blaze!.signTransaction(tx);
+      await wallet.api.postTransaction(signedTx);
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while registering script");
     }
@@ -271,10 +269,9 @@ function App() {
         .provideScript(ctx.uniqueMint.validator)
         .complete();
 
-      const witnessSet = await wallet.api.signTransaction(tx, true);
-      tx.setWitnessSet(witnessSet);
-      await wallet.api.postTransaction(tx);
-      setLatestTx(tx);
+      const signedTx = await blaze!.signTransaction(tx);
+      await wallet.api.postTransaction(signedTx);
+      setLatestTx(signedTx);
       setBadgeUtxo(
         new TransactionUnspentOutput(
           new TransactionInput(tx.getId(), 0n),
@@ -298,10 +295,9 @@ function App() {
         .lockLovelace(ctx.lockScript.address, 2000000n, Data.to(policyId))
         .complete();
 
-      const witnessSet = await wallet.api.signTransaction(tx, true);
-      tx.setWitnessSet(witnessSet);
-      await wallet.api.postTransaction(tx);
-      setLatestTx(tx);
+      const signedTx = await blaze!.signTransaction(tx);
+      await wallet.api.postTransaction(signedTx);
+      setLatestTx(signedTx);
 
       setState("LockingDone");
     } catch (err) {
@@ -374,10 +370,9 @@ function App() {
         .provideScript(ctx.badgesScript.validator)
         .complete();
 
-      const witnessSet = await wallet.api.signTransaction(tx, true);
-      tx.setWitnessSet(witnessSet);
-      await wallet.api.postTransaction(tx);
-      setLatestTx(tx);
+      const signedTx = await blaze!.signTransaction(tx);
+      await wallet.api.postTransaction(signedTx);
+      setLatestTx(signedTx);
 
       setState("UnlockingDone");
     } catch (err) {
@@ -395,11 +390,9 @@ function App() {
         .provideScript(ctx.uniqueMint.validator)
         .complete();
 
-      const walletApi = loadedWallet()!.api;
-      const witnessSet = await walletApi.signTransaction(tx, true);
-      tx.setWitnessSet(witnessSet);
-      await walletApi.postTransaction(tx);
-      setLatestTx(tx);
+      const signedTx = await blaze!.signTransaction(tx);
+      await loadedWallet()!.api.postTransaction(signedTx);
+      setLatestTx(signedTx);
 
       setState("BadgeBurningDone");
     } catch (err) {

@@ -1,29 +1,37 @@
 import { createSignal, Show } from "solid-js";
 import { cip30Discover, Cip30Wallet } from "./Wallet.ts";
 import {
-  Address,
-  applyDoubleCborEncoding,
-  applyParamsToScript,
+  Blockfrost,
+  WebWallet,
+  Blaze,
+  Provider,
   Constr,
   Data,
-  fromText,
-  Koios,
-  Lucid,
-  LucidEvolution,
-  mintingPolicyToId,
-  paymentCredentialOf,
-  RewardAddress,
-  UTxO,
-  Validator,
-  validatorToAddress,
-  validatorToRewardAddress,
-  validatorToScriptHash,
-  WalletApi,
-} from "@lucid-evolution/lucid";
+  Wallet,
+  applyParams,
+  cborToScript,
+} from "@blaze-cardano/sdk";
+import {
+  Address,
+  PolicyId,
+  Script,
+  Credential,
+  Transaction,
+  AssetName,
+  TransactionUnspentOutput,
+  TransactionInput,
+  NetworkId,
+  CredentialType,
+  Hash28ByteBase16,
+  AddressType,
+  Ed25519KeyHashHex,
+  RewardAccount,
+} from "@blaze-cardano/core";
 
 type LoadedWallet = Cip30Wallet & {
-  api: WalletApi;
-  utxos: UTxO[] | undefined;
+  api: WebWallet;
+  changeAddress: Address;
+  utxos: TransactionUnspentOutput[] | undefined;
 };
 
 type State =
@@ -39,61 +47,53 @@ type State =
 
 type AppContext = {
   loadedWallet: LoadedWallet;
-  localStateUtxos: UTxO[];
+  localStateUtxos: TransactionUnspentOutput[];
   badgesScript: {
-    hash: string;
-    validator: Validator;
-    rewardAddress: RewardAddress;
+    hash: Hash28ByteBase16;
+    validator: Script;
+    credential: Credential;
   };
   uniqueMint: {
-    pickedUtxo: UTxO;
+    pickedUtxo: TransactionUnspentOutput;
     pickedUtxoRef: string;
-    validator: Validator;
-    policyId: string;
+    validator: Script;
+    policyId: PolicyId;
   };
   lockScript: {
     address: Address;
-    validator: Validator;
+    validator: Script;
     hash: string;
   };
 };
 
-type LatestTx = {
-  txId: string;
-  txOutputs: UTxO[];
-  newWalletUtxos: UTxO[];
-};
-
 function App() {
-  const network: "Preview" | "Mainnet" = "Preview";
+  const networkId: NetworkId = NetworkId.Testnet; // 0: Testnet, 1: Mainnet
   const [state, setState] = createSignal<State>("Startup");
   const [wallets, setWallets] = createSignal<Cip30Wallet[]>([]);
   const [loadedWallet, setLoadedWallet] = createSignal<LoadedWallet | null>(
     null,
   );
-  const [scripts, setScripts] = createSignal<Script[]>([]);
+  const [scripts, setScripts] = createSignal<BlueprintScript[]>([]);
   const [appContext, setAppContext] = createSignal<AppContext | null>(null);
-  const [badgeUtxo, setBadgeUtxo] = createSignal<UTxO | null>(null);
-  const [latestTx, setLatestTx] = createSignal<LatestTx | null>(null);
+  const [badgeUtxo, setBadgeUtxo] =
+    createSignal<TransactionUnspentOutput | null>(null);
+  const [latestTx, setLatestTx] = createSignal<Transaction | null>(null);
   const [errors, setErrors] = createSignal("");
 
-  // Initialize Lucid Evolution library with some API provider
-  let lucid: LucidEvolution | null = null;
-  (async () => {
-    lucid = await Lucid(
-      new Koios(
-        "https://preview.koios.rest/api/v1",
-        import.meta.env.VITE_KOIOS_API_KEY,
-      ),
-      "Preview",
-    );
-  })();
+  // Initialize Blaze library with some API provider
+  const provider = new Blockfrost({
+    network: "cardano-preview",
+    projectId: import.meta.env.VITE_BLOCKFROST_PROJECT_ID,
+  });
 
   // Discover installed CIP-30 wallets
   setWallets(cip30Discover());
   setState("WalletsDiscovered");
 
-  type Script = {
+  // Blaze to be initialized after wallet is enabled
+  let blaze: Blaze<Provider, Wallet> | undefined;
+
+  type BlueprintScript = {
     name: string;
     scriptBytes: string;
     hash: string;
@@ -103,7 +103,7 @@ function App() {
   function loadBlueprint() {
     const handleBlueprint = (result: {
       ok: boolean;
-      data?: Script[];
+      data?: BlueprintScript[];
       error?: unknown;
     }) => {
       if (result.ok && result.data) {
@@ -155,14 +155,21 @@ function App() {
       );
       if (!mintBlueprint) throw new Error("Mint script not found in blueprint");
 
-      const appliedMint = applyParamsToScript(mintBlueprint.scriptBytes, [
+      const mintScriptBeforeApply = cborToScript(
+        mintBlueprint.scriptBytes,
+        "PlutusV3",
+      );
+      const appliedMint = applyParams(
+        mintScriptBeforeApply.asPlutusV3()!.rawBytes(),
         // Convert headUtxo reference into Data
-        new Constr(0, [headUtxo.txHash, BigInt(headUtxo.outputIndex)]),
-      ]);
-      const mintScript: Validator = {
-        type: "PlutusV3",
-        script: appliedMint,
-      };
+        Data.to(
+          new Constr(0, [
+            headUtxo.input().transactionId(),
+            headUtxo.input().index(),
+          ]),
+        ),
+      );
+      const mintScript = cborToScript(appliedMint, "PlutusV3");
 
       // Find badges script in blueprint
       const badgesBlueprint = scripts().find(
@@ -171,46 +178,56 @@ function App() {
       if (!badgesBlueprint)
         throw new Error("Badges script not found in blueprint");
 
-      const badgesScriptHash = badgesBlueprint.hash;
-      const badgesScript: Validator = {
-        type: "PlutusV3",
-        script: applyDoubleCborEncoding(badgesBlueprint.scriptBytes),
-      };
-      const badgesScriptRewardAddress: RewardAddress = validatorToRewardAddress(
-        network,
-        badgesScript,
+      const badgesScript = cborToScript(
+        badgesBlueprint.scriptBytes,
+        "PlutusV3",
       );
+      const badgesScriptCred: Credential = Credential.fromCore({
+        type: CredentialType.ScriptHash,
+        hash: badgesScript.hash(),
+      });
 
       // Find lock script in blueprint
       const lockBlueprint = scripts().find((s) => s.name === "lock.lock.spend");
       if (!lockBlueprint) throw new Error("Lock script not found in blueprint");
 
-      const appliedLock = applyParamsToScript(lockBlueprint.scriptBytes, [
-        badgesScriptHash,
-      ]);
-      const lockScript: Validator = {
-        type: "PlutusV3",
-        script: appliedLock,
-      };
+      const lockScriptBeforeApply = cborToScript(
+        lockBlueprint.scriptBytes,
+        "PlutusV3",
+      );
+      const appliedLock = applyParams(
+        lockScriptBeforeApply.asPlutusV3()!.rawBytes(),
+        Data.to(badgesBlueprint.hash),
+      );
+      const lockScript = cborToScript(appliedLock, "PlutusV3");
 
       setAppContext({
         loadedWallet: wallet,
         localStateUtxos: walletUtxos,
         badgesScript: {
-          hash: badgesScriptHash,
+          hash: badgesScript.hash(),
           validator: badgesScript,
-          rewardAddress: badgesScriptRewardAddress,
+          credential: badgesScriptCred,
         },
         uniqueMint: {
           pickedUtxo: headUtxo,
-          pickedUtxoRef: headUtxo.txHash + "#" + headUtxo.outputIndex,
+          pickedUtxoRef:
+            headUtxo.input().transactionId() + "#" + headUtxo.input().index(),
           validator: mintScript,
-          policyId: mintingPolicyToId(mintScript),
+          policyId: PolicyId(mintScript.hash()),
         },
         lockScript: {
-          address: validatorToAddress(network, lockScript),
+          // address: validatorToAddress(network, lockScript),
+          address: new Address({
+            type: AddressType.EnterpriseScript,
+            networkId,
+            paymentPart: {
+              type: CredentialType.ScriptHash,
+              hash: lockScript.hash(),
+            },
+          }),
           validator: lockScript,
-          hash: validatorToScriptHash(lockScript),
+          hash: lockScript.hash(),
         },
       });
 
@@ -225,14 +242,17 @@ function App() {
 
   async function registerScript() {
     try {
+      const wallet = loadedWallet()!;
       const ctx = appContext()!;
-      const tx = await lucid!
-        .newTx()
-        .register.Stake(ctx.badgesScript.rewardAddress)
-        .attach.Script(ctx.badgesScript.validator)
+      const tx = await blaze!
+        .newTransaction()
+        .addRegisterStake(ctx.badgesScript.credential)
+        .provideScript(ctx.badgesScript.validator)
+        .setChangeAddress(wallet.changeAddress)
         .complete();
-      const signedTx = await tx.sign.withWallet().complete();
-      await signedTx.submit();
+      const witnessSet = await wallet.api.signTransaction(tx, true);
+      tx.setWitnessSet(witnessSet);
+      await wallet.api.postTransaction(tx);
     } catch (err) {
       setErrors(err?.toString() || "Unknown error while registering script");
     }
@@ -240,24 +260,27 @@ function App() {
 
   async function mintBadge() {
     try {
+      const wallet = loadedWallet()!;
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .collectFrom([ctx.uniqueMint.pickedUtxo]) // required UTxO to be spent (for unicity)
-        .mintAssets(
-          {
-            [policyId + fromText("")]: 1n,
-          },
-          Data.to([]),
-        )
-        .attach.Script(ctx.uniqueMint.validator)
-        .chain();
+      console.log(ctx.uniqueMint.validator.hash());
+      const tx = await blaze!
+        .newTransaction()
+        .addInput(ctx.uniqueMint.pickedUtxo)
+        .addMint(policyId, new Map([[AssetName(""), 1n]]), Data.to([]))
+        .provideScript(ctx.uniqueMint.validator)
+        .complete();
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
-      setBadgeUtxo(txOutputs[0]);
+      const witnessSet = await wallet.api.signTransaction(tx, true);
+      tx.setWitnessSet(witnessSet);
+      await wallet.api.postTransaction(tx);
+      setLatestTx(tx);
+      setBadgeUtxo(
+        new TransactionUnspentOutput(
+          new TransactionInput(tx.getId(), 0n),
+          tx.body().outputs()[0],
+        ),
+      );
 
       setState("BadgeMintingDone");
     } catch (err) {
@@ -267,25 +290,18 @@ function App() {
 
   async function lockAssets() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
+      const wallet = loadedWallet()!;
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .pay.ToContract(
-          ctx.lockScript.address,
-          {
-            kind: "inline",
-            value: Data.to(policyId),
-          },
-          { lovelace: 2000000n },
-        )
-        .chain();
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      const tx = await blaze!
+        .newTransaction()
+        .lockLovelace(ctx.lockScript.address, 2000000n, Data.to(policyId))
+        .complete();
+
+      const witnessSet = await wallet.api.signTransaction(tx, true);
+      tx.setWitnessSet(witnessSet);
+      await wallet.api.postTransaction(tx);
+      setLatestTx(tx);
 
       setState("LockingDone");
     } catch (err) {
@@ -295,12 +311,16 @@ function App() {
 
   async function unlockAssets() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
+      const wallet = loadedWallet()!;
       const ctx = appContext()!;
       // The locked UTxO was the first output of the locking transaction
-      const lockedUtxo = latestTx()!.txOutputs[0];
+      const prevTx = latestTx()!;
+      const prevTxId = prevTx.getId();
+      const lockedOutput = prevTx.body().outputs()[0];
+      const lockedUtxo = new TransactionUnspentOutput(
+        new TransactionInput(prevTxId, 0n),
+        lockedOutput,
+      );
 
       // The unlock redeemer must contain the index of the badges withdraw redeemer
       // in the list of redeemer in the script context (for fast access).
@@ -329,26 +349,35 @@ function App() {
       );
 
       // Extract the payment credential from the wallet address
-      const walletAddress = await lucid!.wallet().address();
-      const walletKeyHash = paymentCredentialOf(walletAddress).hash;
+      const walletKeyHash = Ed25519KeyHashHex(
+        wallet.changeAddress.getProps().paymentPart?.hash!,
+      );
 
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
+      const tx = await blaze!
+        .newTransaction()
         // collect the locked UTxO
-        .collectFrom([lockedUtxo], unlockRedeemer)
-        .attach.Script(ctx.lockScript.validator)
+        .addInput(lockedUtxo, unlockRedeemer)
+        .provideScript(ctx.lockScript.validator)
         // Provide the badge proof to the verification withdraw script.
         // This also needs the wallet signature since it’s provided by reference.
-        .readFrom([badgeUtxo()!])
-        .addSignerKey(walletKeyHash)
+        .addReferenceInput(badgeUtxo()!)
+        .addRequiredSigner(walletKeyHash)
         // call the badges verification withdraw script (with 0 ada withdrawal)
-        .withdraw(ctx.badgesScript.rewardAddress, 0n, badgesRedeemer)
-        .attach.Script(ctx.badgesScript.validator)
-        .chain();
+        .addWithdrawal(
+          RewardAccount.fromCredential(
+            ctx.badgesScript.credential.value(),
+            networkId,
+          ),
+          0n,
+          badgesRedeemer,
+        )
+        .provideScript(ctx.badgesScript.validator)
+        .complete();
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      const witnessSet = await wallet.api.signTransaction(tx, true);
+      tx.setWitnessSet(witnessSet);
+      await wallet.api.postTransaction(tx);
+      setLatestTx(tx);
 
       setState("UnlockingDone");
     } catch (err) {
@@ -358,25 +387,19 @@ function App() {
 
   async function burnBadge() {
     try {
-      // Update wallet UTxOs with the latest Tx
-      lucid!.overrideUTxOs(latestTx()!.newWalletUtxos);
-
       const ctx = appContext()!;
       const policyId = ctx.uniqueMint.policyId;
-      const [newWalletUtxos, txOutputs, txSignBuilder] = await lucid!
-        .newTx()
-        .mintAssets(
-          {
-            [policyId + fromText("")]: -1n,
-          },
-          Data.to([]),
-        )
-        .attach.Script(ctx.uniqueMint.validator)
-        .chain();
+      const tx = await blaze!
+        .newTransaction()
+        .addMint(PolicyId(policyId), new Map([[AssetName(""), -1n]]))
+        .provideScript(ctx.uniqueMint.validator)
+        .complete();
 
-      const signedTx = await txSignBuilder.sign.withWallet().complete();
-      const txId = await signedTx.submit();
-      setLatestTx({ txId, newWalletUtxos, txOutputs });
+      const walletApi = loadedWallet()!.api;
+      const witnessSet = await walletApi.signTransaction(tx, true);
+      tx.setWitnessSet(witnessSet);
+      await walletApi.postTransaction(tx);
+      setLatestTx(tx);
 
       setState("BadgeBurningDone");
     } catch (err) {
@@ -418,11 +441,14 @@ function App() {
             <button
               onClick={async () => {
                 const api = await wallet.enable();
-                lucid?.selectWallet.fromAPI(api);
-                const utxos = await lucid?.wallet().getUtxos();
+                const webWallet = new WebWallet(api);
+                const changeAddress = await webWallet.getChangeAddress();
+                const utxos = await webWallet.getUnspentOutputs();
+                blaze = await Blaze.from(provider, webWallet);
                 setLoadedWallet({
                   ...wallet,
-                  api,
+                  api: webWallet,
+                  changeAddress,
                   utxos,
                 });
                 setState("WalletConnected");
@@ -490,7 +516,7 @@ function App() {
       <Show when={state() === "BadgeMintingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token minting done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTx()!.getId()}</div>
         <button onClick={lockAssets}>Lock 2 Ada with the badge as key</button>
         {viewErrors()}
       </Show>
@@ -498,7 +524,7 @@ function App() {
       <Show when={state() === "LockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets locking done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTx()!.getId()}</div>
         <button onClick={unlockAssets}>
           Unlock the assets with the badge as key
         </button>
@@ -508,7 +534,7 @@ function App() {
       <Show when={state() === "UnlockingDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Assets unlocked!</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTx()!.getId()}</div>
         <button onClick={burnBadge}>Burn the badge</button>
         {viewErrors()}
       </Show>
@@ -516,7 +542,7 @@ function App() {
       <Show when={state() === "BadgeBurningDone"}>
         {viewLoadedWallet(appContext()!.loadedWallet)}
         <div>Token burning done</div>
-        <div>Transaction ID: {latestTx()!.txId}</div>
+        <div>Transaction ID: {latestTx()!.getId()}</div>
         {viewErrors()}
       </Show>
     </div>

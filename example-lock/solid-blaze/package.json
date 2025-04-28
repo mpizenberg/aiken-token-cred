@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@blaze-cardano/core": "^0.6.3",
+    "@blaze-cardano/sdk": "^0.2.29",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

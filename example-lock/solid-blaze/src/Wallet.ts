@@ -1,15 +1,15 @@
 "use strict";
 
-import { WalletApi } from "@lucid-evolution/lucid";
+import { CIP30Interface } from "@blaze-cardano/sdk";
 
 function cip30Discover(): Cip30Wallet[] {
   const wallets: Cip30Wallet[] = [];
   if ("cardano" in window) {
-    const potentialWallets = window.cardano!;
+    const potentialWallets = window.cardano as { [key: string]: any };
     for (const walletId in potentialWallets) {
-      const wallet = potentialWallets[walletId];
+      const wallet: Cip30Wallet = potentialWallets[walletId];
       if (isCip30(wallet)) {
-        wallets.push(wallet);
+        wallets.push(wallet!);
       }
     }
   } else {
@@ -32,10 +32,5 @@ export interface Cip30Wallet {
   apiVersion: string;
   supportedExtensions?: string[];
   isEnabled: () => Promise<boolean>;
-  enable: (extensions?: Array<{ cip: string }>) => Promise<WalletApi>;
-}
-
-export interface Cip30Api {
-  // Placeholder for CIP-30 API methods
-  [key: string]: any;
+  enable: (extensions?: Array<{ cip: string }>) => Promise<CIP30Interface>;
 }

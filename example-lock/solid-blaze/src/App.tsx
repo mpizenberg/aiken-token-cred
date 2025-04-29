@@ -4,6 +4,7 @@ import {
   Blockfrost,
   WebWallet,
   Blaze,
+  Kupmios,
   Provider,
   Constr,
   Data,
@@ -26,7 +27,12 @@ import {
   AddressType,
   Ed25519KeyHashHex,
   RewardAccount,
+  Evaluator,
+  hardCodedProtocolParams,
+  SLOT_CONFIG_NETWORK,
 } from "@blaze-cardano/core";
+// import { makeUplcEvaluator } from "@blaze-cardano/vm";
+import { Unwrapped } from "@blaze-cardano/ogmios";
 
 type LoadedWallet = Cip30Wallet & {
   api: WebWallet;
@@ -68,6 +74,12 @@ type AppContext = {
 
 function App() {
   const networkId: NetworkId = NetworkId.Testnet; // 0: Testnet, 1: Mainnet
+  // const uplcVm: Evaluator = makeUplcEvaluator(
+  //   hardCodedProtocolParams,
+  //   1,
+  //   1,
+  //   SLOT_CONFIG_NETWORK.Preview,
+  // );
   const [state, setState] = createSignal<State>("Startup");
   const [wallets, setWallets] = createSignal<Cip30Wallet[]>([]);
   const [loadedWallet, setLoadedWallet] = createSignal<LoadedWallet | null>(
@@ -81,10 +93,22 @@ function App() {
   const [errors, setErrors] = createSignal("");
 
   // Initialize Blaze library with some API provider
-  const provider = new Blockfrost({
-    network: "cardano-preview",
-    projectId: import.meta.env.VITE_BLOCKFROST_PROJECT_ID,
-  });
+  let provider: Provider | null = null;
+  // const blockfrostProvider = new Blockfrost({
+  //   network: "cardano-preview",
+  //   projectId: import.meta.env.VITE_BLOCKFROST_PROJECT_ID,
+  // });
+  // provider = blockfrostProvider;
+  (async function () {
+    const ogmios = await Unwrapped.Ogmios.new(
+      "https://ogmios1qsrks7v96368z9f7s2l.preview-v6.ogmios-m1.demeter.run",
+    );
+    const kupmiosProvider = new Kupmios(
+      "https://kupo1wdfamtee7aksurslg0h.preview-v2.kupo-m1.demeter.run",
+      ogmios,
+    );
+    provider = kupmiosProvider;
+  })();
 
   // Discover installed CIP-30 wallets
   setWallets(cip30Discover());
@@ -248,6 +272,7 @@ function App() {
         .addRegisterStake(ctx.badgesScript.credential)
         .provideScript(ctx.badgesScript.validator)
         .setChangeAddress(wallet.changeAddress)
+        // .useEvaluator(uplcVm)
         .complete();
       const signedTx = await blaze!.signTransaction(tx);
       await wallet.api.postTransaction(signedTx);
@@ -267,6 +292,7 @@ function App() {
         .addInput(ctx.uniqueMint.pickedUtxo)
         .addMint(policyId, new Map([[AssetName(""), 1n]]), Data.to([]))
         .provideScript(ctx.uniqueMint.validator)
+        // .useEvaluator(uplcVm)
         .complete();
 
       const signedTx = await blaze!.signTransaction(tx);
@@ -293,6 +319,7 @@ function App() {
       const tx = await blaze!
         .newTransaction()
         .lockLovelace(ctx.lockScript.address, 2000000n, Data.to(policyId))
+        // .useEvaluator(uplcVm)
         .complete();
 
       const signedTx = await blaze!.signTransaction(tx);
@@ -368,6 +395,7 @@ function App() {
           badgesRedeemer,
         )
         .provideScript(ctx.badgesScript.validator)
+        // .useEvaluator(uplcVm)
         .complete();
 
       const signedTx = await blaze!.signTransaction(tx);
@@ -388,6 +416,7 @@ function App() {
         .newTransaction()
         .addMint(PolicyId(policyId), new Map([[AssetName(""), -1n]]))
         .provideScript(ctx.uniqueMint.validator)
+        // .useEvaluator(uplcVm)
         .complete();
 
       const signedTx = await blaze!.signTransaction(tx);
@@ -437,7 +466,7 @@ function App() {
                 const webWallet = new WebWallet(api);
                 const changeAddress = await webWallet.getChangeAddress();
                 const utxos = await webWallet.getUnspentOutputs();
-                blaze = await Blaze.from(provider, webWallet);
+                blaze = await Blaze.from(provider!, webWallet);
                 setLoadedWallet({
                   ...wallet,
                   api: webWallet,

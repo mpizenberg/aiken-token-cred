@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@blaze-cardano/core": "^0.6.3",
+    "@blaze-cardano/ogmios": "^0.0.7",
     "@blaze-cardano/sdk": "^0.2.29",
+    "@blaze-cardano/vm": "^0.1.9",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

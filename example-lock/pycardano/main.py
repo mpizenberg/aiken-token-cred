@@ -1,17 +1,23 @@
+import sys
 from blockfrost import ApiUrls
+from pycardano.backend.cardano_cli import subprocess
+from pycardano.plutus import classproperty
 from pycardano import (
     Address,
     KupoOgmiosV6ChainContext,
     MultiAsset,
     Network,
     BlockFrostChainContext,
+    PlutusData,
     PlutusV3Script,
+    RawPlutusData,
     Redeemer,
     ScriptHash,
     StakeCredential,
     StakeRegistration,
     Transaction,
     TransactionBuilder,
+    TransactionInput,
     TransactionOutput,
     TransactionWitnessSet,
     Value,
@@ -19,7 +25,26 @@ from pycardano import (
 from dotenv import load_dotenv
 import os
 import json
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
+from dataclasses import dataclass
+
+
+@dataclass
+class OutputRefData(PlutusData):
+    """PlutusData representation for an output reference"""
+
+    @classproperty
+    def CONSTR_ID(cls):
+        return 0
+
+    tx_id: bytes
+    output_index: int
+
+    @classmethod
+    def from_ref(cls, output_ref: TransactionInput):
+        return cls(output_ref.transaction_id.payload, output_ref.index)
 
 
 def main():
@@ -36,7 +61,7 @@ def main():
     # Retrieve the user wallet address
     wallet_address = Address.decode(wallet_address_bech32)
 
-    # Create a BlockFrost chain context
+    # Create a chain context (API provider)
     # context = BlockFrostChainContext(
     #     blockfrost_project_id, base_url=ApiUrls.preview.value
     # )
@@ -50,28 +75,82 @@ def main():
         kupo_url=kupo_url,
     )
 
-    # Load the script bytes from the blueprint json files
-    badges_blueprint = load_blueprint("badges-plutus.json")
-    lock_blueprint = load_blueprint("lock-plutus.json")
-    validators = badges_blueprint | lock_blueprint
-    print("validators:", validators.keys())
+    # Get the first wallet UTxOs to guarantee mint unicity
+    print("Retrieving wallet UTxOs ...")
+    utxos = context.utxos(wallet_address)
+    picked_utxo = utxos[0]
 
-    # # Register the badges validator
-    # badges_validator = validators["check_badges.check_badges.withdraw"]
-    # tx = register_badge_script(context, wallet_address, badges_validator["hash"])
-    # print("Register Tx (unsigned):", tx.to_cbor_hex())
-    # signed_tx_hex = input("Paste signed Tx cbor hex: ")
-    # signed_tx = Transaction.from_cbor(signed_tx_hex)
-    # tx_id = context.submit_tx_cbor(signed_tx_hex)
-    # print("Tx submitted with ID:", tx_id)
+    # Apply the parameters needed to each validator
+    print("Applying parameters to each validator ...")
+    validators = []
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Apply the picked utxo to the mint validator
+        applied_mint_path = temp_path / "applied_mint.json"
+        mint_param = OutputRefData.from_ref(picked_utxo.input)
+        subprocess.run(
+            [
+                "/Users/piz/git/aiken-lang/aiken/target/release/aiken",
+                "blueprint",
+                "apply",
+                "--in",
+                "badges-plutus.json",
+                "--out",
+                applied_mint_path,
+                "--module",
+                "mint_badge",
+                "--validator",
+                "mint_badge",
+                mint_param.to_cbor_hex(),
+            ],
+        )
+
+        # Load the updated blueprint for badges (contains all validators)
+        badges_blueprint = load_blueprint(applied_mint_path)
+
+        # Apply the badges validator script hash to the lock validator
+        badges_validator = badges_blueprint["check_badges.check_badges.withdraw"]
+        badges_script_hash = badges_validator["hash"]
+        hash_param = RawPlutusData.from_primitive(badges_script_hash)
+        applied_lock_path = temp_path / "applied_lock.json"
+        subprocess.run(
+            [
+                "/Users/piz/git/aiken-lang/aiken/target/release/aiken",
+                "blueprint",
+                "apply",
+                "--in",
+                "lock-plutus.json",
+                "--out",
+                applied_lock_path,
+                "--module",
+                "lock",
+                "--validator",
+                "lock",
+                hash_param.to_cbor_hex(),
+            ],
+        )
+
+        # Load the updated blueprint for the lock script
+        lock_blueprint = load_blueprint(applied_lock_path)
+
+        # Update the validators variable
+        validators = badges_blueprint | lock_blueprint
+        print("validators:", validators.keys())
+
+    # Register the badges validator
+    register = False
+    if register:
+        badges_validator = validators["check_badges.check_badges.withdraw"]
+        tx = register_badge_script(context, wallet_address, badges_validator["hash"])
+        tx_id, signed_tx = sign_and_submit("Register", context, tx)
+        print("Terminating. You need to restart with register=False in the code.")
+        sys.exit(0)
 
     # Mint the badge
     mint_validator = validators["mint_badge.mint_badge.mint"]
-    tx = mint_badge(context, wallet_address, mint_validator)
-    print("Mint Tx (unsigned):", tx.to_cbor_hex())
-    signed_tx_hex = input("Paste signed Tx cbor hex: ")
-    signed_tx = Transaction.from_cbor(signed_tx_hex)
-    tx_id = context.submit_tx_cbor(signed_tx_hex)
+    tx = mint_badge(context, wallet_address, mint_validator, picked_utxo)
+    tx_id, signed_tx = sign_and_submit("Mint", context, tx)
     print("Tx submitted with ID:", tx_id)
 
 
@@ -84,6 +163,14 @@ def load_blueprint(file_path):
                 "hash": bytes.fromhex(v["hash"]),
             }
     return validators
+
+
+def sign_and_submit(label, context, tx):
+    print(f"{label} Tx (unsigned):", tx.to_cbor_hex())
+    signed_tx_hex = input("Paste signed Tx cbor hex: ")
+    signed_tx = Transaction.from_cbor(signed_tx_hex)
+    tx_id = context.submit_tx_cbor(signed_tx_hex)
+    return tx_id, signed_tx
 
 
 def register_badge_script(context, wallet_address: Address, script_hash: bytes):
@@ -101,17 +188,12 @@ def register_badge_script(context, wallet_address: Address, script_hash: bytes):
     return tx
 
 
-def mint_badge(context, wallet_address: Address, validator):
+def mint_badge(context, wallet_address: Address, validator, picked_utxo):
     builder = TransactionBuilder(context)
     builder.add_input_address(wallet_address)
 
     # Get the first wallet UTxOs to guarantee mint unicity
-    utxos = context.utxos(wallet_address)
-    picked_utxo = utxos[0]
     builder.add_input(picked_utxo)
-
-    # Apply the picked utxo to the validator
-    unnapplied_script = PlutusV3Script(validator["compiled_code"])
 
     # Mint the token
     policy_id = validator["hash"]
@@ -123,13 +205,13 @@ def mint_badge(context, wallet_address: Address, validator):
     builder.add_output(TransactionOutput(wallet_address, Value(1_500_000, mint)))
 
     # Add the script to the witness set
+    script = PlutusV3Script(validator["compiled_code"])
     builder.add_minting_script(script, Redeemer([]))
 
     # Build the tx
     tx_body = builder.build(change_address=wallet_address, auto_required_signers=False)
     tx_witness_set = builder.build_witness_set(True)
-    tx = Transaction(tx_body, tx_witness_set)
-    return tx
+    return Transaction(tx_body, tx_witness_set)
 
 
 if __name__ == "__main__":

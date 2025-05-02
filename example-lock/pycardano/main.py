@@ -1,6 +1,4 @@
-import sys
 from blockfrost import ApiUrls
-from pycardano.backend.cardano_cli import subprocess
 from pycardano.plutus import classproperty
 from pycardano import (
     Address,
@@ -22,9 +20,11 @@ from pycardano import (
     Value,
 )
 from dotenv import load_dotenv
+import sys
 import os
 import json
 import tempfile
+import subprocess
 import readline  # Just to override the input() function with something more robust with more than 1024K chars limit
 from pathlib import Path
 from urllib.parse import urlparse

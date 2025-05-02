@@ -18,7 +18,6 @@ from pycardano import (
     Transaction,
     TransactionBuilder,
     TransactionInput,
-    TransactionOutput,
     TransactionWitnessSet,
     Value,
 )
@@ -141,6 +140,7 @@ def main():
     # Register the badges validator
     register = False
     if register:
+        print("Building the registration Tx ...")
         badges_validator = validators["check_badges.check_badges.withdraw"]
         tx = register_badge_script(context, wallet_address, badges_validator["hash"])
         tx_id, signed_tx = sign_and_submit("Register", context, tx)
@@ -148,6 +148,7 @@ def main():
         sys.exit(0)
 
     # Mint the badge
+    print("Building the mint Tx ...")
     mint_validator = validators["mint_badge.mint_badge.mint"]
     tx = mint_badge(context, wallet_address, mint_validator, picked_utxo)
     tx_id, signed_tx = sign_and_submit("Mint", context, tx)
@@ -199,10 +200,6 @@ def mint_badge(context, wallet_address: Address, validator, picked_utxo):
     policy_id = validator["hash"]
     mint = MultiAsset.from_primitive({policy_id: {b"": 1}})
     builder.mint = mint
-
-    # Mandatory creation of an output because it’s not done
-    # by the builder before uplc evaluation ??? TODO: not sure, still failing
-    builder.add_output(TransactionOutput(wallet_address, Value(1_500_000, mint)))
 
     # Add the script to the witness set
     script = PlutusV3Script(validator["compiled_code"])

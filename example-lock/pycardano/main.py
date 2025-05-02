@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 import os
 import json
 import tempfile
+import readline  # Just to override the input() function with something more robust with more than 1024K chars limit
 from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import dataclass
@@ -143,7 +144,7 @@ def main():
         print("Building the registration Tx ...")
         badges_validator = validators["check_badges.check_badges.withdraw"]
         tx = register_badge_script(context, wallet_address, badges_validator["hash"])
-        tx_id, signed_tx = sign_and_submit("Register", context, tx)
+        sign_and_submit("Register", context, tx)
         print("Terminating. You need to restart with register=False in the code.")
         sys.exit(0)
 
@@ -151,8 +152,19 @@ def main():
     print("Building the mint Tx ...")
     mint_validator = validators["mint_badge.mint_badge.mint"]
     tx = mint_badge(context, wallet_address, mint_validator, picked_utxo)
-    tx_id, signed_tx = sign_and_submit("Mint", context, tx)
-    print("Tx submitted with ID:", tx_id)
+    signed_tx = sign_and_submit("Mint", context, tx)
+    print("Tx submitted with ID:", signed_tx.id)
+
+    # TODO: Lock assets
+    sys.exit(0)
+    print("Building the lock Tx ...")
+    lock_validator = validators["lock.lock.spend"]
+    tx = lock_assets(context, wallet_address, lock_validator)
+    signed_tx = sign_and_submit("Locking", context, tx)
+    print("Tx submitted with ID:", signed_tx.id)
+
+    # TODO: Unlock assets
+    # TODO: Burn the badge
 
 
 def load_blueprint(file_path):
@@ -166,12 +178,13 @@ def load_blueprint(file_path):
     return validators
 
 
-def sign_and_submit(label, context, tx):
+def sign_and_submit(label, context, tx) -> Transaction:
     print(f"{label} Tx (unsigned):", tx.to_cbor_hex())
-    signed_tx_hex = input("Paste signed Tx cbor hex: ")
+    print("Paste signed Tx cbor hex: ", end="", flush=True)
+    signed_tx_hex = input()
     signed_tx = Transaction.from_cbor(signed_tx_hex)
-    tx_id = context.submit_tx_cbor(signed_tx_hex)
-    return tx_id, signed_tx
+    context.submit_tx_cbor(signed_tx_hex)
+    return signed_tx  # pyright: ignore
 
 
 def register_badge_script(context, wallet_address: Address, script_hash: bytes):
